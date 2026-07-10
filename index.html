@@ -96,6 +96,8 @@ const CONFIG = {
   EP_LOGIN:     "/genericos/ge/Login/Autenticar",
   EP_MATERIAIS: "/suprimentos/es/Materiais/Buscar",
   EP_ESTOQUE:   "/suprimentos/es/Estoque/Buscar",
+  EP_DISPONIB:  "/suprimentos/es/Disponibilidade/Buscar",
+  DISPONIB_PARALELO: 8,    // consultas simultâneas de disponibilidade
   AUTO_REFRESH_MIN: 5,
   // ---- Supabase (banco compartilhado) — cole os valores do seu projeto ----
   SUPABASE_URL: "https://pyblkmxoczxqpzvbnlca.supabase.co",
@@ -163,7 +165,7 @@ const CONFIG = {
       <div class="card danger"><div class="k">Zerados</div><div class="v" id="cZero">—</div></div>
     </div>
     <div class="charts">
-      <div class="panel"><h3>Saldo × Mínimo — itens com menor cobertura</h3>
+      <div class="panel"><h3>Disponível × Mínimo — itens com menor cobertura</h3>
         <canvas id="chartBar"></canvas></div>
       <div class="panel"><h3>Distribuição de status</h3>
         <canvas id="chartDonut"></canvas></div>
@@ -190,14 +192,15 @@ const CONFIG = {
           <th data-sort="codigo">Código</th>
           <th data-sort="descricao">Descrição</th>
           <th data-sort="um">Un.</th>
-          <th class="num" data-sort="saldo">Saldo</th>
-          <th class="num" data-sort="cobertura" title="Saldo ÷ venda média por dia (referência: junho/2026)">Cobertura (dias)</th>
+          <th class="num" data-sort="saldo" title="Saldo físico total (estoque final)">Saldo final</th>
+          <th class="num" data-sort="disponivel" title="Saldo final − reservado em pedidos de venda (carteira)">Disponível</th>
+          <th class="num" data-sort="cobertura" title="Disponível ÷ venda média por dia (referência: junho/2026)">Cobertura (dias)</th>
           <th class="num" data-sort="min">Mínimo</th>
-          <th class="num" data-sort="produzir" title="Quanto falta para voltar ao mínimo">Produzir hoje</th>
+          <th class="num" data-sort="produzir" title="Quanto falta para o disponível voltar ao mínimo">Produzir hoje</th>
           <th data-sort="status">Status</th>
         </tr>
       </thead>
-      <tbody id="tbody"><tr><td colspan="8" class="muted">Carregando…</td></tr></tbody>
+      <tbody id="tbody"><tr><td colspan="9" class="muted">Carregando…</td></tr></tbody>
     </table>
     <p class="muted" id="rowInfo" style="margin-top:10px"></p>
   </div>
@@ -300,9 +303,11 @@ async function dbSalvarMinimosEmLote(obj){
 async function dbSerieTotal(){
   if(!sb) return null;
   try{
-    const { data, error } = await sb.from('snapshots_total').select('data,saldo').order('data',{ascending:true}).limit(120);
+    const { data, error } = await sb.from('snapshots_total').select('*').order('data',{ascending:true}).limit(120);
     if(error) throw error;
-    return (data||[]).map(r=>({dia: r.data.split('-').reverse().join('/'), total: Number(r.saldo)||0}));
+    return (data||[]).map(r=>({dia: r.data.split('-').reverse().join('/'),
+      total: Number(r.saldo)||0,
+      disp: r.disponivel == null ? null : Number(r.disponivel)}));
   }catch(e){ console.warn("snapshots_total:", e); return null; }
 }
 async function dbSerieProduto(cod){
@@ -310,15 +315,17 @@ async function dbSerieProduto(cod){
   const d0 = new Date(Date.now() - 120*86400000).toISOString().slice(0,10);
   try{
     const { data, error } = await sb.from('snapshots')
-      .select('data,filial,saldo').eq('codigo',cod).gte('data',d0)
+      .select('data,filial,saldo,disponivel').eq('codigo',cod).gte('data',d0)
       .order('data',{ascending:true}).limit(1000);
     if(error) throw error;
     const porDia = {};
     (data||[]).forEach(r=>{
       if(STATE.filial && trim(r.filial) !== STATE.filial) return;
-      porDia[r.data] = (porDia[r.data]||0) + (Number(r.saldo)||0);
+      const o = porDia[r.data] = porDia[r.data] || {total:0, disp:null};
+      o.total += Number(r.saldo)||0;
+      if(r.disponivel != null) o.disp = (o.disp||0) + Number(r.disponivel);
     });
-    return Object.entries(porDia).map(([d,v])=>({dia: d.split('-').reverse().join('/'), total: v}));
+    return Object.entries(porDia).map(([d,v])=>({dia: d.split('-').reverse().join('/'), total: v.total, disp: v.disp}));
   }catch(e){ console.warn("snapshots produto:", e); return null; }
 }
 /* =====================================================================
@@ -350,7 +357,8 @@ async function carregarDados(){
     const c = trim(m.Material && m.Material.Codigo);
     if(!c) return;
     map.set(c, { codigo:c, descricao:trim(m.Material.Descricao),
-                 um:trim(m.Material.CodigoUnidadeMedida), saldoPorFilial:{} });
+                 um:trim(m.Material.CodigoUnidadeMedida), saldoPorFilial:{},
+                 reservaPorFilial:{}, dispOk:false });
   });
   const est = await apiGet(CONFIG.EP_ESTOQUE);
   const filiais = new Set();
@@ -364,6 +372,45 @@ async function carregarDados(){
   preencherFiliais([...filiais].sort());
   STATE.materiais = [...map.values()];
   preencherDatalist();
+}
+// Disponível = saldo físico − demandas de carteira de pedido (mesma regra da
+// tela de Disponibilidade do CIGAM). Uma consulta por item, em paralelo.
+async function carregarDisponibilidade(onProgress){
+  const itens = STATE.materiais;
+  let feito = 0, falhas = 0, idx = 0;
+  async function consultar(item){
+    try{
+      const r = await fetch(CONFIG.API_BASE + CONFIG.EP_DISPONIB, {
+        method: "POST",
+        headers: { "Authorization":"Bearer "+token(), "Content-Type":"application/json" },
+        body: JSON.stringify({ Origem:"ES", CodigoMaterial:item.codigo,
+          CodigoUnidadeNegocio:"001", CodigoCentroArmazenagem:"001",
+          CodigoUsuario:"", SuprimirZerados:false })
+      });
+      if(r.status === 401){ const e = new Error("401"); e.code = 401; throw e; }
+      if(!r.ok) throw new Error("HTTP "+r.status);
+      const j = await r.json();
+      const res = {};
+      (j.DemandasGerais||[]).forEach(d=>{
+        const un = trim(d.CodigoUnidadeNegocio);
+        res[un] = (res[un]||0) + (Number(d.QuantidadeSaldo)||0);
+      });
+      item.reservaPorFilial = res;
+      item.dispOk = true;
+    }catch(e){
+      if(e.code === 401) throw e;       // sessão caiu: interrompe tudo
+      item.dispOk = false; falhas++;    // falha pontual: item usa saldo físico
+    }finally{
+      feito++;
+      if(onProgress && feito % 10 === 0) onProgress(feito, itens.length);
+    }
+  }
+  // fila com concorrência limitada
+  async function operario(){
+    while(idx < itens.length){ const i = idx++; await consultar(itens[i]); }
+  }
+  await Promise.all(Array.from({length: CONFIG.DISPONIB_PARALELO}, operario));
+  return falhas;
 }
 function preencherFiliais(lista){
   const sel = $('#filFilial'); const atual = STATE.filial;
@@ -385,18 +432,27 @@ function saldoDe(item){
   if(STATE.filial) return item.saldoPorFilial[STATE.filial] || 0;
   return Object.values(item.saldoPorFilial).reduce((a,b)=>a+b,0);
 }
+function reservaDe(item){
+  if(!item.dispOk) return 0;   // sem info de reserva: disponível = saldo físico
+  if(STATE.filial) return item.reservaPorFilial[STATE.filial] || 0;
+  return Object.values(item.reservaPorFilial).reduce((a,b)=>a+b,0);
+}
+// Disponível = saldo físico − reservado em pedidos (pode ficar negativo se
+// houver mais pedido em carteira do que estoque)
+function disponivelDe(item){ return saldoDe(item) - reservaDe(item); }
 function minDe(item){ return Number(STATE.minimos[item.codigo])||0; }
 function demandaDe(item){ return Number(STATE.demanda[item.codigo])||0; }
+// Status, cobertura e "produzir" olham para o DISPONÍVEL (o que dá pra vender)
 function coberturaDe(item){
   const d = demandaDe(item);
-  return d > 0 ? saldoDe(item)/d : Infinity;   // Infinity = sem referência de venda
+  return d > 0 ? disponivelDe(item)/d : Infinity;
 }
 function produzirDe(item){
   const m = minDe(item);
-  return m > 0 ? Math.max(0, Math.ceil(m - saldoDe(item))) : 0;
+  return m > 0 ? Math.max(0, Math.ceil(m - disponivelDe(item))) : 0;
 }
 function statusDe(item){
-  const s = saldoDe(item), m = minDe(item);
+  const s = disponivelDe(item), m = minDe(item);
   if(s <= 0) return "zerado";
   if(m > 0 && s < m) return "abaixo";
   return "ok";
@@ -417,7 +473,8 @@ function linhasFiltradasOrdenadas(){
   const q = STATE.search.toLowerCase();
   let rows = STATE.materiais.map(it=>({
     it, codigo:it.codigo, descricao:it.descricao, um:it.um,
-    saldo:saldoDe(it), cobertura:coberturaDe(it), min:minDe(it),
+    saldo:saldoDe(it), disponivel:disponivelDe(it), dispOk:it.dispOk,
+    cobertura:coberturaDe(it), min:minDe(it),
     produzir:produzirDe(it), status:statusDe(it)
   }));
   if(q) rows = rows.filter(r => r.codigo.toLowerCase().includes(q) || r.descricao.toLowerCase().includes(q));
@@ -439,17 +496,21 @@ function cobHtml(c){
 function renderTabela(){
   const rows = linhasFiltradasOrdenadas();
   const tb = $('#tbody');
-  if(!rows.length){ tb.innerHTML = '<tr><td colspan="8" class="muted">Nenhum item encontrado.</td></tr>'; }
+  if(!rows.length){ tb.innerHTML = '<tr><td colspan="9" class="muted">Nenhum item encontrado.</td></tr>'; }
   else {
     tb.innerHTML = rows.map(r=>{
       const cls = r.status;
       const label = cls==="ok"?"OK":cls==="abaixo"?"Abaixo":"Zerado";
       const prod = r.produzir>0 ? `<span class="produzir">${fmt(r.produzir)}</span>` : '<span class="muted">—</span>';
+      const disp = r.dispOk
+        ? (r.disponivel < r.saldo ? `<b>${fmt(r.disponivel)}</b>` : fmt(r.disponivel))
+        : `<span class="muted" title="Disponibilidade não carregada — mostrando saldo físico">${fmt(r.disponivel)}*</span>`;
       return `<tr>
         <td>${r.codigo}</td>
         <td>${escapeHtml(r.descricao)}</td>
         <td>${r.um}</td>
         <td class="num">${fmt(r.saldo)}</td>
+        <td class="num">${disp}</td>
         <td class="num">${cobHtml(r.cobertura)}</td>
         <td class="num"><input class="min" type="number" min="0" step="1"
              value="${r.min||''}" data-cod="${r.codigo}" placeholder="0"></td>
@@ -458,9 +519,11 @@ function renderTabela(){
       </tr>`;
     }).join('');
   }
+  const totReserva = STATE.materiais.reduce((a,it)=>a+reservaDe(it),0);
   $('#rowInfo').textContent = rows.length + " item(ns) exibido(s)" +
-    (STATE.filial ? " · Filial "+STATE.filial : " · Todas as filiais (saldo somado)") +
-    " · Cobertura usa a venda média de junho/2026 como referência";
+    (STATE.filial ? " · Filial "+STATE.filial : " · Todas as filiais (somadas)") +
+    " · Reservado em pedidos: " + fmt(totReserva) + " un" +
+    " · Status/cobertura/produzir usam o DISPONÍVEL · Cobertura: venda média de junho/2026";
   tb.querySelectorAll('input.min').forEach(inp=>{
     inp.addEventListener('change', async e=>{
       const cod = e.target.dataset.cod;
@@ -474,7 +537,7 @@ function renderTabela(){
 }
 function renderGraficos(ok, ab, ze){
   const comMin = STATE.materiais
-    .map(it=>({d:it.descricao||it.codigo, s:saldoDe(it), m:minDe(it)}))
+    .map(it=>({d:it.descricao||it.codigo, s:disponivelDe(it), m:minDe(it)}))
     .filter(x=>x.m>0)
     .map(x=>({...x, cob: x.s/x.m}))
     .sort((a,b)=>a.cob-b.cob)
@@ -486,7 +549,7 @@ function renderGraficos(ok, ab, ze){
 }
 function drawBar(labels, saldos, minimos){
   const data = { labels, datasets:[
-      {label:"Saldo", data:saldos, backgroundColor:"#0d6efd"},
+      {label:"Disponível", data:saldos, backgroundColor:"#0d6efd"},
       {label:"Mínimo", data:minimos, backgroundColor:"#f59e0b"}]};
   if(charts.bar){ charts.bar.data=data; charts.bar.update(); return; }
   charts.bar = new Chart($('#chartBar'), {type:"bar", data,
@@ -513,8 +576,13 @@ async function drawLineTotal(){
   let hist = await dbSerieTotal();
   if(hist && hist.length){ $('#subTotal').textContent = "Histórico do banco compartilhado (coletado pelo robô diário)."; }
   else { hist = loadHistLocal(); $('#subTotal').textContent = "Histórico local deste navegador (banco ainda sem dados)."; }
-  const data = {labels:hist.map(h=>h.dia), datasets:[{label:"Saldo total", data:hist.map(h=>h.total),
-    borderColor:"#0d6efd", backgroundColor:"rgba(13,110,253,.12)", fill:true, tension:.25, pointRadius:3}]};
+  const dsets = [{label:"Saldo final", data:hist.map(h=>h.total),
+    borderColor:"#0d6efd", backgroundColor:"rgba(13,110,253,.12)", fill:true, tension:.25, pointRadius:3}];
+  if(hist.some(h=>h.disp != null)){
+    dsets.push({label:"Disponível", data:hist.map(h=>h.disp),
+      borderColor:"#16a34a", backgroundColor:"rgba(22,163,74,.10)", fill:true, tension:.25, pointRadius:3});
+  }
+  const data = {labels:hist.map(h=>h.dia), datasets:dsets};
   if(charts.line){ charts.line.data=data; charts.line.update(); return; }
   charts.line = new Chart($('#chartLine'), {type:"line", data,
     options:{responsive:true, plugins:{legend:{position:'bottom'}}, scales:{y:{beginAtZero:true}}}});
@@ -537,8 +605,10 @@ async function drawLineProduto(){
     (STATE.filial ? " · Filial "+STATE.filial : " · Todas as filiais");
   const minimo = minDe(item);
   const data = {labels:serie.map(h=>h.dia), datasets:[
-    {label:"Saldo", data:serie.map(h=>h.total), borderColor:"#0d6efd",
+    {label:"Saldo final", data:serie.map(h=>h.total), borderColor:"#0d6efd",
      backgroundColor:"rgba(13,110,253,.12)", fill:true, tension:.25, pointRadius:3},
+    ...(serie.some(h=>h.disp != null) ? [{label:"Disponível", data:serie.map(h=>h.disp),
+     borderColor:"#16a34a", backgroundColor:"rgba(22,163,74,.10)", fill:true, tension:.25, pointRadius:3}] : []),
     ...(minimo>0 ? [{label:"Mínimo", data:serie.map(()=>minimo), borderColor:"#dc2626",
      borderDash:[6,4], pointRadius:0, fill:false}] : [])
   ]};
@@ -557,8 +627,12 @@ async function atualizar(){
     if(!token()){ showLogin("Sessão expirada. Entre novamente."); return; }
     await carregarDados();
     await dbCarregarTudo();      // mínimos + demanda do banco (1ª vez)
+    render();                    // mostra saldos imediatamente
+    btn.innerHTML = '<span class="spin"></span> Disponível…';
+    const falhas = await carregarDisponibilidade((f,t)=>{ btn.innerHTML = `<span class="spin"></span> Disponível ${f}/${t}`; });
+    if(falhas > 0) showErr(falhas + " item(ns) sem consulta de disponibilidade — para esses, o painel usa o saldo físico (marcados com *).");
     saveSnapshotLocal();
-    render();
+    render();                    // re-render com disponível + status finais
     drawLineProduto();
     $('#lastUpdate').textContent = "Atualizado em " +
       new Date().toLocaleDateString('pt-BR') + " às " +
