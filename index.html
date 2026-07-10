@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel de Estoque — CIGAM (Grupo 002)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+  :root{
+    --bg:#f4f6f9; --card:#fff; --ink:#1f2937; --muted:#6b7280;
+    --line:#e5e7eb; --brand:#0d6efd; --ok:#16a34a; --warn:#f59e0b; --danger:#dc2626;
+    --shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.04);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+       background:var(--bg);color:var(--ink);font-size:14px}
+  header{background:#fff;border-bottom:1px solid var(--line);padding:12px 20px;
+         display:flex;align-items:center;gap:14px;flex-wrap:wrap;box-shadow:var(--shadow)}
+  header h1{font-size:16px;margin:0;font-weight:700}
+  header .spacer{flex:1}
+  .badge{font-size:12px;color:var(--muted)}
+  .pill{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:#f9fafb;color:var(--muted)}
+  .pill.on{background:#dcfce7;color:#166534;border-color:#bbf7d0}
+  .pill.err{background:#fee2e2;color:#991b1b;border-color:#fecaca}
+  button{cursor:pointer;border:1px solid var(--line);background:#fff;border-radius:8px;
+         padding:8px 12px;font-size:13px;color:var(--ink);transition:.15s}
+  button:hover{background:#f3f4f6}
+  button.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  button.primary:hover{filter:brightness(.95)}
+  input,select{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:13px;
+        background:#fff;color:var(--ink)}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px}
+  #login,#modalEquipe .box{max-width:380px;background:#fff;border:1px solid var(--line);
+         border-radius:14px;padding:28px;box-shadow:var(--shadow)}
+  #login{margin:8vh auto}
+  #login h2{margin:0 0 4px}
+  #login p{margin:0 0 20px;color:var(--muted);font-size:13px}
+  #login label,#modalEquipe label{display:block;font-size:12px;color:var(--muted);margin:12px 0 4px}
+  #login input,#modalEquipe input{width:100%}
+  #login button{width:100%;margin-top:20px}
+  #modalEquipe{display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50}
+  #modalEquipe.show{display:flex;align-items:center;justify-content:center}
+  #modalEquipe h3{margin:0 0 6px}
+  #modalEquipe .box p{color:var(--muted);font-size:12px;margin:0 0 8px}
+  #modalEquipe .acts{display:flex;gap:8px;margin-top:18px}
+  #modalEquipe .acts button{flex:1}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:var(--shadow)}
+  .card .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+  .card .v{font-size:26px;font-weight:700;margin-top:6px}
+  .card.ok .v{color:var(--ok)} .card.warn .v{color:var(--warn)} .card.danger .v{color:var(--danger)}
+  .charts{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:18px}
+  .charts .full{grid-column:1/-1}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;box-shadow:var(--shadow)}
+  .panel h3{margin:0 0 10px;font-size:14px}
+  .panel .sub{font-size:12px;color:var(--muted);margin:-6px 0 10px}
+  canvas{max-height:300px}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  .toolbar .spacer{flex:1}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);
+        border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+  th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
+  th{background:#f9fafb;cursor:pointer;user-select:none;white-space:nowrap}
+  th.num,td.num{text-align:right}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:#fafafa}
+  .status{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600}
+  .status.ok{background:#dcfce7;color:#166534}
+  .status.abaixo{background:#fef3c7;color:#92400e}
+  .status.zerado{background:#fee2e2;color:#991b1b}
+  td input.min{width:90px;text-align:right}
+  .cob-baixa{color:var(--danger);font-weight:700}
+  .cob-media{color:var(--warn);font-weight:600}
+  .produzir{color:var(--danger);font-weight:700}
+  #err{display:none;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;
+       padding:12px 16px;border-radius:10px;margin-bottom:14px}
+  #err.show{display:block}
+  .muted{color:var(--muted);font-size:12px}
+  .hidden{display:none!important}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid #cbd5e1;
+        border-top-color:var(--brand);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<!-- ===================================================================
+     CONFIGURAÇÃO — preencha SUPABASE_URL e SUPABASE_ANON_KEY (README).
+     Sem eles o painel funciona em modo local (igual à v1).
+     =================================================================== -->
+<script>
+const CONFIG = {
+  API_BASE: "https://gostinhomineiroportais.cigam.cloud/api/api",
+  PORTAL: "",
+  GRUPO: "002",
+  EP_LOGIN:     "/genericos/ge/Login/Autenticar",
+  EP_MATERIAIS: "/suprimentos/es/Materiais/Buscar",
+  EP_ESTOQUE:   "/suprimentos/es/Estoque/Buscar",
+  AUTO_REFRESH_MIN: 5,
+  // ---- Supabase (banco compartilhado) — cole os valores do seu projeto ----
+  SUPABASE_URL: "https://pyblkmxoczxqpzvbnlca.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_Gbn2k66sQaOXx6kVQmbUGg_tuZEG36C",   // chave pública (RLS protege a escrita)
+};
+</script>
+<!-- ============================ TELA DE LOGIN (CIGAM) ============================ -->
+<div id="login">
+  <h2>Painel de Estoque</h2>
+  <p>ERP CIGAM · Grupo <b id="loginGrupo">002</b> (Produtos Acabados)</p>
+  <label>Usuário</label>
+  <input id="usr" type="text" autocomplete="username" placeholder="usuário da API do CIGAM">
+  <label>Senha</label>
+  <input id="pwd" type="password" autocomplete="current-password" placeholder="sua senha da API">
+  <label>Portal (opcional)</label>
+  <input id="portal" type="text" placeholder="deixe vazio se não usar">
+  <button class="primary" id="btnLogin">Entrar</button>
+  <div id="loginErr" class="muted" style="color:var(--danger);margin-top:12px"></div>
+  <div class="muted" style="margin-top:16px">A senha é usada apenas para autenticar na API e não fica salva.
+    O token fica em sessionStorage e é descartado ao fechar a aba.</div>
+</div>
+<!-- ============================ LOGIN DA EQUIPE (Supabase) ============================ -->
+<div id="modalEquipe">
+  <div class="box">
+    <h3>Login da equipe</h3>
+    <p>Necessário para <b>salvar</b> mínimos no banco compartilhado. Sem ele, o painel só lê.</p>
+    <label>E-mail</label>
+    <input id="eqEmail" type="email" autocomplete="email">
+    <label>Senha</label>
+    <input id="eqSenha" type="password" autocomplete="current-password">
+    <div id="eqErr" class="muted" style="color:var(--danger);margin-top:10px"></div>
+    <div class="acts">
+      <button id="eqCancelar">Cancelar</button>
+      <button id="eqEntrar" class="primary">Entrar</button>
+    </div>
+  </div>
+</div>
+<!-- ============================ APLICAÇÃO ============================ -->
+<div id="app" class="hidden">
+  <header>
+    <h1>📦 Estoque · Grupo <span id="hdrGrupo">002</span></h1>
+    <span class="badge" id="lastUpdate">—</span>
+    <span class="pill" id="dbPill">Banco: off</span>
+    <div class="spacer"></div>
+    <label class="muted">Filial:
+      <select id="filFilial"><option value="">Todas</option></select>
+    </label>
+    <label class="muted">Auto:
+      <select id="autoSel">
+        <option value="0">Off</option><option value="5">5 min</option>
+        <option value="10">10 min</option><option value="15">15 min</option>
+        <option value="30">30 min</option>
+      </select>
+    </label>
+    <button id="btnEquipe">Equipe: entrar</button>
+    <button id="btnRefresh" class="primary">Atualizar</button>
+    <button id="btnLogout">Sair</button>
+  </header>
+  <div class="wrap">
+    <div id="err"></div>
+    <div class="cards">
+      <div class="card"><div class="k">Total de itens</div><div class="v" id="cTotal">—</div></div>
+      <div class="card ok"><div class="k">Itens OK</div><div class="v" id="cOk">—</div></div>
+      <div class="card warn"><div class="k">Abaixo do mínimo</div><div class="v" id="cAbaixo">—</div></div>
+      <div class="card danger"><div class="k">Zerados</div><div class="v" id="cZero">—</div></div>
+    </div>
+    <div class="charts">
+      <div class="panel"><h3>Saldo × Mínimo — itens com menor cobertura</h3>
+        <canvas id="chartBar"></canvas></div>
+      <div class="panel"><h3>Distribuição de status</h3>
+        <canvas id="chartDonut"></canvas></div>
+      <div class="panel full"><h3>Evolução do saldo total</h3>
+        <div class="sub" id="subTotal">Histórico do banco compartilhado (coletado pelo robô diário).</div>
+        <canvas id="chartLine"></canvas></div>
+      <div class="panel full"><h3>Evolução por produto</h3>
+        <div class="sub">Digite ou escolha um produto. Histórico coletado pelo robô diário.</div>
+        <input id="selProd" list="dlProd" placeholder="ex.: PAO DE QUEIJO PREMIUM 30G PCT 5KG" style="min-width:340px">
+        <datalist id="dlProd"></datalist>
+        <div id="prodMsg" class="muted" style="margin-top:8px"></div>
+        <canvas id="chartProd"></canvas></div>
+    </div>
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Buscar por código ou descrição…" style="min-width:280px">
+      <span class="spacer"></span>
+      <button id="btnExport">Exportar mínimos (JSON)</button>
+      <button id="btnImport">Importar mínimos (JSON)</button>
+      <input id="fileImport" type="file" accept="application/json" class="hidden">
+    </div>
+    <table id="tbl">
+      <thead>
+        <tr>
+          <th data-sort="codigo">Código</th>
+          <th data-sort="descricao">Descrição</th>
+          <th data-sort="um">Un.</th>
+          <th class="num" data-sort="saldo">Saldo</th>
+          <th class="num" data-sort="cobertura" title="Saldo ÷ venda média por dia (referência: junho/2026)">Cobertura (dias)</th>
+          <th class="num" data-sort="min">Mínimo</th>
+          <th class="num" data-sort="produzir" title="Quanto falta para voltar ao mínimo">Produzir hoje</th>
+          <th data-sort="status">Status</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"><tr><td colspan="8" class="muted">Carregando…</td></tr></tbody>
+    </table>
+    <p class="muted" id="rowInfo" style="margin-top:10px"></p>
+  </div>
+</div>
+<script>
+/* =====================================================================
+   ESTADO E UTILITÁRIOS
+   ===================================================================== */
+const $ = s => document.querySelector(s);
+document.getElementById('loginGrupo').textContent = CONFIG.GRUPO;
+document.getElementById('hdrGrupo').textContent   = CONFIG.GRUPO;
+const LS_MIN  = "cigam_min_"+CONFIG.GRUPO;
+const LS_HIST = "cigam_hist_"+CONFIG.GRUPO;
+const SS_TOKEN= "cigam_token";
+let STATE = {
+  materiais: [], minimos: loadMinimos(), demanda: {},   // demanda: codigo -> média/dia
+  filial: "", sort: {key:"codigo", dir:1}, search: "",
+  autoTimer: null, dbLoaded: false, avisoSync: false
+};
+let charts = {bar:null, donut:null, line:null, prod:null};
+function loadMinimos(){ try{return JSON.parse(localStorage.getItem(LS_MIN))||{};}catch(e){return{};} }
+function saveMinimosLocal(){ localStorage.setItem(LS_MIN, JSON.stringify(STATE.minimos)); }
+function token(){ return sessionStorage.getItem(SS_TOKEN); }
+function fmt(n){ return (Number(n)||0).toLocaleString('pt-BR',{maximumFractionDigits:3}); }
+function showErr(msg){ const e=$('#err'); e.textContent=msg; e.classList.add('show'); }
+function clearErr(){ $('#err').classList.remove('show'); }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+const trim = s => (s==null?"":String(s)).trim();
+/* =====================================================================
+   BANCO COMPARTILHADO (Supabase) — opcional; sem ele, modo local
+   ===================================================================== */
+let sb = null, sbUser = null;
+function dbConfigurado(){ return !!(CONFIG.SUPABASE_URL && CONFIG.SUPABASE_ANON_KEY); }
+function dbPill(){
+  const p = $('#dbPill'), b = $('#btnEquipe');
+  if(!dbConfigurado()){ p.textContent="Banco: off (modo local)"; p.className="pill"; b.classList.add('hidden'); return; }
+  b.classList.remove('hidden');
+  if(sbUser){ p.textContent="Banco: "+sbUser.email; p.className="pill on"; b.textContent="Equipe: sair"; }
+  else { p.textContent="Banco: somente leitura"; p.className="pill"; b.textContent="Equipe: entrar"; }
+}
+async function dbInit(){
+  if(!dbConfigurado()) { dbPill(); return; }
+  try{
+    sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+    const { data } = await sb.auth.getSession();
+    sbUser = data && data.session ? data.session.user : null;
+    sb.auth.onAuthStateChange((_e, sess)=>{ sbUser = sess ? sess.user : null; dbPill(); });
+  }catch(e){ console.warn("Supabase indisponível:", e); sb = null; }
+  dbPill();
+}
+// Carrega mínimos + demanda de referência do banco (banco vence o local)
+async function dbCarregarTudo(){
+  if(!sb || STATE.dbLoaded) return;
+  try{
+    const [mins, dem] = await Promise.all([
+      sb.from('minimos').select('codigo,minimo'),
+      sb.from('demanda_ref').select('codigo,media_dia')
+    ]);
+    if(mins.error || dem.error) throw (mins.error || dem.error);
+    (mins.data||[]).forEach(r=>{ STATE.minimos[trim(r.codigo)] = Number(r.minimo)||0; });
+    saveMinimosLocal();
+    (dem.data||[]).forEach(r=>{ STATE.demanda[trim(r.codigo)] = Number(r.media_dia)||0; });
+    STATE.dbLoaded = true;
+  }catch(e){
+    console.warn("Falha ao ler banco:", e);
+    $('#dbPill').textContent = "Banco: erro ao ler"; $('#dbPill').className = "pill err";
+  }
+}
+async function dbSalvarMinimo(cod, val){
+  if(!sb) return false;
+  if(!sbUser){
+    if(!STATE.avisoSync){
+      STATE.avisoSync = true;
+      showErr('Mínimo salvo só neste navegador. Clique em "Equipe: entrar" para gravar no banco compartilhado.');
+    }
+    return false;
+  }
+  try{
+    let q;
+    if(val > 0){
+      q = await sb.from('minimos').upsert({codigo:cod, minimo:val, updated_by:sbUser.email, updated_at:new Date().toISOString()});
+    } else {
+      q = await sb.from('minimos').delete().eq('codigo', cod);
+    }
+    if(q.error) throw q.error;
+    return true;
+  }catch(e){ showErr("Não consegui gravar no banco: "+(e.message||e)); return false; }
+}
+async function dbSalvarMinimosEmLote(obj){
+  if(!sb || !sbUser) return 0;
+  const rows = Object.entries(obj).map(([codigo,minimo])=>({
+    codigo, minimo, updated_by:sbUser.email, updated_at:new Date().toISOString()
+  }));
+  try{
+    const { error } = await sb.from('minimos').upsert(rows);
+    if(error) throw error;
+    return rows.length;
+  }catch(e){ showErr("Falha ao sincronizar mínimos: "+(e.message||e)); return 0; }
+}
+async function dbSerieTotal(){
+  if(!sb) return null;
+  try{
+    const { data, error } = await sb.from('snapshots_total').select('data,saldo').order('data',{ascending:true}).limit(120);
+    if(error) throw error;
+    return (data||[]).map(r=>({dia: r.data.split('-').reverse().join('/'), total: Number(r.saldo)||0}));
+  }catch(e){ console.warn("snapshots_total:", e); return null; }
+}
+async function dbSerieProduto(cod){
+  if(!sb) return null;
+  const d0 = new Date(Date.now() - 120*86400000).toISOString().slice(0,10);
+  try{
+    const { data, error } = await sb.from('snapshots')
+      .select('data,filial,saldo').eq('codigo',cod).gte('data',d0)
+      .order('data',{ascending:true}).limit(1000);
+    if(error) throw error;
+    const porDia = {};
+    (data||[]).forEach(r=>{
+      if(STATE.filial && trim(r.filial) !== STATE.filial) return;
+      porDia[r.data] = (porDia[r.data]||0) + (Number(r.saldo)||0);
+    });
+    return Object.entries(porDia).map(([d,v])=>({dia: d.split('-').reverse().join('/'), total: v}));
+  }catch(e){ console.warn("snapshots produto:", e); return null; }
+}
+/* =====================================================================
+   CAMADA DE API DO CIGAM (somente leitura)
+   ===================================================================== */
+async function apiLogin(usr, pwd, portal){
+  const r = await fetch(CONFIG.API_BASE + CONFIG.EP_LOGIN, {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ NomeUsuario:usr, Senha:pwd, Portal:portal||"" })
+  });
+  const j = await r.json().catch(()=>null);
+  if(!r.ok || !j || !j.success || !j.hash){
+    const m = (j && j.messages && j.messages.join(", ")) || ("Falha no login (HTTP "+r.status+")");
+    throw new Error(m);
+  }
+  return j.hash;
+}
+async function apiGet(path){
+  const r = await fetch(CONFIG.API_BASE + path, { headers:{ "Authorization":"Bearer "+token() } });
+  if(r.status === 401){ const e=new Error("401"); e.code=401; throw e; }
+  if(!r.ok){ throw new Error("HTTP "+r.status+" em "+path); }
+  return r.json();
+}
+async function carregarDados(){
+  const filtro = "$filter=" + encodeURIComponent("Material/CodigoGrupo eq '"+CONFIG.GRUPO+"'");
+  const mats = await apiGet(CONFIG.EP_MATERIAIS + "?" + filtro);
+  const map = new Map();
+  mats.forEach(m=>{
+    const c = trim(m.Material && m.Material.Codigo);
+    if(!c) return;
+    map.set(c, { codigo:c, descricao:trim(m.Material.Descricao),
+                 um:trim(m.Material.CodigoUnidadeMedida), saldoPorFilial:{} });
+  });
+  const est = await apiGet(CONFIG.EP_ESTOQUE);
+  const filiais = new Set();
+  est.forEach(x=>{
+    const e = x.Estoque; if(!e) return;
+    const it = map.get(trim(e.CodigoMaterial)); if(!it) return;
+    const un = trim(e.CodigoUnidadeNegocio);
+    filiais.add(un);
+    it.saldoPorFilial[un] = (it.saldoPorFilial[un]||0) + (Number(e.Saldo)||0);
+  });
+  preencherFiliais([...filiais].sort());
+  STATE.materiais = [...map.values()];
+  preencherDatalist();
+}
+function preencherFiliais(lista){
+  const sel = $('#filFilial'); const atual = STATE.filial;
+  if(sel.options.length-1 === lista.length) return;
+  sel.innerHTML = '<option value="">Todas</option>' +
+    lista.map(f=>`<option value="${f}">Filial ${f}</option>`).join('');
+  sel.value = atual;
+}
+function preencherDatalist(){
+  const dl = $('#dlProd');
+  if(dl.options.length === STATE.materiais.length) return;
+  dl.innerHTML = STATE.materiais
+    .map(m=>`<option value="${escapeHtml(m.descricao)}"></option>`).join('');
+}
+/* =====================================================================
+   REGRAS DE NEGÓCIO
+   ===================================================================== */
+function saldoDe(item){
+  if(STATE.filial) return item.saldoPorFilial[STATE.filial] || 0;
+  return Object.values(item.saldoPorFilial).reduce((a,b)=>a+b,0);
+}
+function minDe(item){ return Number(STATE.minimos[item.codigo])||0; }
+function demandaDe(item){ return Number(STATE.demanda[item.codigo])||0; }
+function coberturaDe(item){
+  const d = demandaDe(item);
+  return d > 0 ? saldoDe(item)/d : Infinity;   // Infinity = sem referência de venda
+}
+function produzirDe(item){
+  const m = minDe(item);
+  return m > 0 ? Math.max(0, Math.ceil(m - saldoDe(item))) : 0;
+}
+function statusDe(item){
+  const s = saldoDe(item), m = minDe(item);
+  if(s <= 0) return "zerado";
+  if(m > 0 && s < m) return "abaixo";
+  return "ok";
+}
+/* =====================================================================
+   RENDER
+   ===================================================================== */
+function render(){
+  const itens = STATE.materiais;
+  let ok=0, ab=0, ze=0;
+  itens.forEach(it=>{ const st=statusDe(it); if(st==="ok")ok++; else if(st==="abaixo")ab++; else ze++; });
+  $('#cTotal').textContent = itens.length;
+  $('#cOk').textContent = ok; $('#cAbaixo').textContent = ab; $('#cZero').textContent = ze;
+  renderTabela();
+  renderGraficos(ok, ab, ze);
+}
+function linhasFiltradasOrdenadas(){
+  const q = STATE.search.toLowerCase();
+  let rows = STATE.materiais.map(it=>({
+    it, codigo:it.codigo, descricao:it.descricao, um:it.um,
+    saldo:saldoDe(it), cobertura:coberturaDe(it), min:minDe(it),
+    produzir:produzirDe(it), status:statusDe(it)
+  }));
+  if(q) rows = rows.filter(r => r.codigo.toLowerCase().includes(q) || r.descricao.toLowerCase().includes(q));
+  const {key,dir} = STATE.sort;
+  rows.sort((a,b)=>{
+    let va=a[key], vb=b[key];
+    if(typeof va==="number" && typeof vb==="number") return (va-vb)*dir;
+    return String(va).localeCompare(String(vb),'pt-BR')*dir;
+  });
+  return rows;
+}
+function cobHtml(c){
+  if(!isFinite(c)) return '<span class="muted">—</span>';
+  const v = c.toLocaleString('pt-BR',{maximumFractionDigits:1});
+  if(c < 2)  return `<span class="cob-baixa">${v}</span>`;
+  if(c < 5)  return `<span class="cob-media">${v}</span>`;
+  return v;
+}
+function renderTabela(){
+  const rows = linhasFiltradasOrdenadas();
+  const tb = $('#tbody');
+  if(!rows.length){ tb.innerHTML = '<tr><td colspan="8" class="muted">Nenhum item encontrado.</td></tr>'; }
+  else {
+    tb.innerHTML = rows.map(r=>{
+      const cls = r.status;
+      const label = cls==="ok"?"OK":cls==="abaixo"?"Abaixo":"Zerado";
+      const prod = r.produzir>0 ? `<span class="produzir">${fmt(r.produzir)}</span>` : '<span class="muted">—</span>';
+      return `<tr>
+        <td>${r.codigo}</td>
+        <td>${escapeHtml(r.descricao)}</td>
+        <td>${r.um}</td>
+        <td class="num">${fmt(r.saldo)}</td>
+        <td class="num">${cobHtml(r.cobertura)}</td>
+        <td class="num"><input class="min" type="number" min="0" step="1"
+             value="${r.min||''}" data-cod="${r.codigo}" placeholder="0"></td>
+        <td class="num">${prod}</td>
+        <td><span class="status ${cls}">${label}</span></td>
+      </tr>`;
+    }).join('');
+  }
+  $('#rowInfo').textContent = rows.length + " item(ns) exibido(s)" +
+    (STATE.filial ? " · Filial "+STATE.filial : " · Todas as filiais (saldo somado)") +
+    " · Cobertura usa a venda média de junho/2026 como referência";
+  tb.querySelectorAll('input.min').forEach(inp=>{
+    inp.addEventListener('change', async e=>{
+      const cod = e.target.dataset.cod;
+      const val = parseFloat(e.target.value);
+      if(isNaN(val) || val<=0) delete STATE.minimos[cod]; else STATE.minimos[cod]=val;
+      saveMinimosLocal();
+      dbSalvarMinimo(cod, isNaN(val)?0:val);   // grava no banco se logado
+      render();
+    });
+  });
+}
+function renderGraficos(ok, ab, ze){
+  const comMin = STATE.materiais
+    .map(it=>({d:it.descricao||it.codigo, s:saldoDe(it), m:minDe(it)}))
+    .filter(x=>x.m>0)
+    .map(x=>({...x, cob: x.s/x.m}))
+    .sort((a,b)=>a.cob-b.cob)
+    .slice(0,20);
+  drawBar(comMin.map(x=>x.d.length>22?x.d.slice(0,22)+"…":x.d),
+          comMin.map(x=>x.s), comMin.map(x=>x.m));
+  drawDonut(ok, ab, ze);
+  drawLineTotal();
+}
+function drawBar(labels, saldos, minimos){
+  const data = { labels, datasets:[
+      {label:"Saldo", data:saldos, backgroundColor:"#0d6efd"},
+      {label:"Mínimo", data:minimos, backgroundColor:"#f59e0b"}]};
+  if(charts.bar){ charts.bar.data=data; charts.bar.update(); return; }
+  charts.bar = new Chart($('#chartBar'), {type:"bar", data,
+    options:{responsive:true, indexAxis:'y', plugins:{legend:{position:'bottom'}}, scales:{x:{beginAtZero:true}}}});
+}
+function drawDonut(ok, ab, ze){
+  const data = {labels:["OK","Abaixo","Zerado"],
+    datasets:[{data:[ok,ab,ze], backgroundColor:["#16a34a","#f59e0b","#dc2626"]}]};
+  if(charts.donut){ charts.donut.data=data; charts.donut.update(); return; }
+  charts.donut = new Chart($('#chartDonut'), {type:"doughnut", data,
+    options:{responsive:true, plugins:{legend:{position:'bottom'}}}});
+}
+function loadHistLocal(){ try{return JSON.parse(localStorage.getItem(LS_HIST))||[];}catch(e){return[];} }
+function saveSnapshotLocal(){
+  const total = STATE.materiais.reduce((a,it)=>a+Object.values(it.saldoPorFilial).reduce((x,y)=>x+y,0),0);
+  const dia = new Date().toLocaleDateString('pt-BR');
+  const hist = loadHistLocal();
+  const i = hist.findIndex(h=>h.dia===dia);
+  if(i>=0) hist[i].total = total; else hist.push({dia, total});
+  while(hist.length>60) hist.shift();
+  localStorage.setItem(LS_HIST, JSON.stringify(hist));
+}
+async function drawLineTotal(){
+  let hist = await dbSerieTotal();
+  if(hist && hist.length){ $('#subTotal').textContent = "Histórico do banco compartilhado (coletado pelo robô diário)."; }
+  else { hist = loadHistLocal(); $('#subTotal').textContent = "Histórico local deste navegador (banco ainda sem dados)."; }
+  const data = {labels:hist.map(h=>h.dia), datasets:[{label:"Saldo total", data:hist.map(h=>h.total),
+    borderColor:"#0d6efd", backgroundColor:"rgba(13,110,253,.12)", fill:true, tension:.25, pointRadius:3}]};
+  if(charts.line){ charts.line.data=data; charts.line.update(); return; }
+  charts.line = new Chart($('#chartLine'), {type:"line", data,
+    options:{responsive:true, plugins:{legend:{position:'bottom'}}, scales:{y:{beginAtZero:true}}}});
+}
+async function drawLineProduto(){
+  const nome = $('#selProd').value.trim();
+  const msg = $('#prodMsg');
+  const item = STATE.materiais.find(m=>m.descricao===nome) ||
+               STATE.materiais.find(m=>m.codigo===nome);
+  if(!item){ msg.textContent = nome ? "Produto não encontrado." : ""; return; }
+  if(!sb){ msg.textContent = "Histórico por produto precisa do banco configurado (README)."; return; }
+  msg.innerHTML = '<span class="spin"></span> carregando histórico…';
+  const serie = await dbSerieProduto(item.codigo);
+  if(!serie || !serie.length){
+    msg.textContent = "Ainda sem histórico para este produto — o robô grava 1 ponto por dia.";
+    if(charts.prod){ charts.prod.destroy(); charts.prod = null; }
+    return;
+  }
+  msg.textContent = item.codigo + " · " + serie.length + " dia(s) de histórico" +
+    (STATE.filial ? " · Filial "+STATE.filial : " · Todas as filiais");
+  const minimo = minDe(item);
+  const data = {labels:serie.map(h=>h.dia), datasets:[
+    {label:"Saldo", data:serie.map(h=>h.total), borderColor:"#0d6efd",
+     backgroundColor:"rgba(13,110,253,.12)", fill:true, tension:.25, pointRadius:3},
+    ...(minimo>0 ? [{label:"Mínimo", data:serie.map(()=>minimo), borderColor:"#dc2626",
+     borderDash:[6,4], pointRadius:0, fill:false}] : [])
+  ]};
+  if(charts.prod){ charts.prod.data=data; charts.prod.update(); return; }
+  charts.prod = new Chart($('#chartProd'), {type:"line", data,
+    options:{responsive:true, plugins:{legend:{position:'bottom'}}, scales:{y:{beginAtZero:true}}}});
+}
+/* =====================================================================
+   FLUXO PRINCIPAL
+   ===================================================================== */
+async function atualizar(){
+  clearErr();
+  const btn = $('#btnRefresh'); const prev = btn.innerHTML;
+  btn.innerHTML = '<span class="spin"></span> Atualizando'; btn.disabled = true;
+  try{
+    if(!token()){ showLogin("Sessão expirada. Entre novamente."); return; }
+    await carregarDados();
+    await dbCarregarTudo();      // mínimos + demanda do banco (1ª vez)
+    saveSnapshotLocal();
+    render();
+    drawLineProduto();
+    $('#lastUpdate').textContent = "Atualizado em " +
+      new Date().toLocaleDateString('pt-BR') + " às " +
+      new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
+  }catch(e){
+    if(e.code === 401){
+      sessionStorage.removeItem(SS_TOKEN);
+      showLogin("Sessão expirada. Entre novamente.");
+    }else if(/Failed to fetch|NetworkError|Load failed/i.test(String(e.message))){
+      showErr("Não foi possível conectar à API do CIGAM. Verifique sua internet e tente novamente.");
+    }else{
+      showErr("Erro ao atualizar: " + e.message);
+    }
+  }finally{
+    btn.innerHTML = prev; btn.disabled = false;
+  }
+}
+/* =====================================================================
+   LOGIN CIGAM / LOGIN EQUIPE
+   ===================================================================== */
+function showLogin(msg){
+  $('#app').classList.add('hidden');
+  $('#login').classList.remove('hidden');
+  $('#loginErr').textContent = msg || "";
+  $('#pwd').value = "";
+}
+function showApp(){
+  $('#login').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+}
+async function doLogin(){
+  const usr = $('#usr').value.trim(), pwd = $('#pwd').value;
+  const portal = $('#portal').value.trim() || CONFIG.PORTAL;
+  if(!usr || !pwd){ $('#loginErr').textContent = "Informe usuário e senha."; return; }
+  const b = $('#btnLogin'); b.disabled = true;
+  b.innerHTML = '<span class="spin"></span> Entrando…';
+  try{
+    const hash = await apiLogin(usr, pwd, portal);
+    sessionStorage.setItem(SS_TOKEN, hash);
+    $('#pwd').value = ""; $('#loginErr').textContent = "";
+    showApp();
+    await atualizar();
+  }catch(e){
+    $('#loginErr').textContent = /Failed to fetch|NetworkError|Load failed/i.test(String(e.message))
+      ? "Não foi possível conectar à API. Verifique sua internet." : e.message;
+  }finally{ b.disabled = false; b.textContent = "Entrar"; }
+}
+async function doLoginEquipe(){
+  const email = $('#eqEmail').value.trim(), senha = $('#eqSenha').value;
+  if(!email || !senha){ $('#eqErr').textContent = "Informe e-mail e senha."; return; }
+  const b = $('#eqEntrar'); b.disabled = true;
+  try{
+    const { error } = await sb.auth.signInWithPassword({email, password:senha});
+    if(error) throw error;
+    $('#modalEquipe').classList.remove('show');
+    $('#eqSenha').value = ""; $('#eqErr').textContent = "";
+    dbPill();
+  }catch(e){ $('#eqErr').textContent = e.message || "Falha no login."; }
+  finally{ b.disabled = false; }
+}
+/* =====================================================================
+   AUTO-ATUALIZAÇÃO / EXPORT / IMPORT
+   ===================================================================== */
+function setAutoRefresh(min){
+  if(STATE.autoTimer){ clearInterval(STATE.autoTimer); STATE.autoTimer = null; }
+  if(min > 0) STATE.autoTimer = setInterval(()=>{ if(token()) atualizar(); }, min*60*1000);
+}
+function exportarMinimos(){
+  const blob = new Blob([JSON.stringify(STATE.minimos, null, 2)], {type:"application/json"});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = "minimos-grupo"+CONFIG.GRUPO+"-"+new Date().toISOString().slice(0,10)+".json";
+  a.click(); URL.revokeObjectURL(a.href);
+}
+async function importarMinimos(file){
+  try{
+    const obj = JSON.parse(await file.text());
+    if(typeof obj !== "object" || obj === null || Array.isArray(obj)) throw new Error("formato inválido (esperado {codigo: minimo})");
+    const limpos = {};
+    for(const [cod, val] of Object.entries(obj)){
+      const v = Number(val);
+      if(trim(cod) && !isNaN(v) && v > 0){ limpos[trim(cod)] = v; STATE.minimos[trim(cod)] = v; }
+    }
+    saveMinimosLocal(); render();
+    let msg = Object.keys(limpos).length + " mínimo(s) importado(s).";
+    if(sb && sbUser){
+      const n = await dbSalvarMinimosEmLote(limpos);
+      msg += n ? " Sincronizados no banco compartilhado." : "";
+    } else if(sb){
+      msg += ' Para gravar no banco compartilhado, clique em "Equipe: entrar" e importe de novo.';
+    }
+    alert(msg);
+  }catch(err){ alert("Arquivo inválido: " + err.message); }
+}
+/* =====================================================================
+   EVENTOS
+   ===================================================================== */
+$('#btnLogin').addEventListener('click', doLogin);
+$('#pwd').addEventListener('keydown', e=>{ if(e.key === "Enter") doLogin(); });
+$('#portal').addEventListener('keydown', e=>{ if(e.key === "Enter") doLogin(); });
+$('#btnLogout').addEventListener('click', ()=>{ sessionStorage.removeItem(SS_TOKEN); showLogin(); });
+$('#btnRefresh').addEventListener('click', atualizar);
+$('#filFilial').addEventListener('change', e=>{ STATE.filial = e.target.value; render(); drawLineProduto(); });
+$('#autoSel').addEventListener('change', e=>setAutoRefresh(Number(e.target.value)));
+$('#search').addEventListener('input', e=>{ STATE.search = e.target.value; renderTabela(); });
+document.querySelectorAll('#tbl th[data-sort]').forEach(th=>{
+  th.addEventListener('click', ()=>{
+    const k = th.dataset.sort;
+    if(STATE.sort.key === k) STATE.sort.dir *= -1; else STATE.sort = {key:k, dir:1};
+    renderTabela();
+  });
+});
+$('#btnExport').addEventListener('click', exportarMinimos);
+$('#btnImport').addEventListener('click', ()=>$('#fileImport').click());
+$('#fileImport').addEventListener('change', e=>{
+  const f = e.target.files[0]; if(f) importarMinimos(f); e.target.value = "";
+});
+$('#selProd').addEventListener('change', drawLineProduto);
+$('#btnEquipe').addEventListener('click', async ()=>{
+  if(sbUser){ await sb.auth.signOut(); dbPill(); return; }
+  $('#modalEquipe').classList.add('show'); $('#eqEmail').focus();
+});
+$('#eqCancelar').addEventListener('click', ()=>$('#modalEquipe').classList.remove('show'));
+$('#eqEntrar').addEventListener('click', doLoginEquipe);
+$('#eqSenha').addEventListener('keydown', e=>{ if(e.key === "Enter") doLoginEquipe(); });
+/* =====================================================================
+   INICIALIZAÇÃO
+   ===================================================================== */
+$('#autoSel').value = String(CONFIG.AUTO_REFRESH_MIN);
+setAutoRefresh(CONFIG.AUTO_REFRESH_MIN);
+$('#portal').value = CONFIG.PORTAL;
+dbInit().finally(()=>{
+  if(token()){ showApp(); atualizar(); } else { showLogin(); }
+});
+</script>
+</body>
+</html>
