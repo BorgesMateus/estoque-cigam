@@ -63,7 +63,7 @@ async function main() {
           lote.push({
             data: String(p.DataPedido || "").slice(0, 10),
             pedido: cod,
-            seq: Number.isFinite(Number(li.Sequencia)) ? Number(li.Sequencia) : idx,
+            seq: idx,  // posição no pedido (a Sequencia do CIGAM se repete)
             codigo: trim(li.CodigoMaterial),
             quantidade: Number(li.Quantidade) || 0,
             preco: li.PrecoUnitario == null ? null : Number(li.PrecoUnitario),
@@ -81,15 +81,21 @@ async function main() {
   await Promise.all(Array.from({ length: 8 }, operario));
   console.log(`itens coletados: ${lote.length} (falhas de pedido: ${falhas})`);
 
+  // apaga e regrava os pedidos do período (reprocessamento limpo)
+  const codigosPedidos = [...new Set(lote.map(l => l.pedido))];
+  for (let i = 0; i < codigosPedidos.length; i += 150) {
+    const grupo = codigosPedidos.slice(i, i + 150).map(c => `"${c}"`).join(",");
+    await sb(`/vendas?pedido=in.(${enc(grupo)})`, { method: "DELETE", headers: { Prefer: "return=minimal" } });
+  }
   for (let i = 0; i < lote.length; i += 500) {
-    await sb("/vendas?on_conflict=pedido,seq,codigo", {
+    await sb("/vendas", {
       method: "POST",
-      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+      headers: { Prefer: "return=minimal" },
       body: JSON.stringify(lote.slice(i, i + 500)),
     });
     linhas += Math.min(500, lote.length - i);
   }
-  console.log(`gravado na tabela vendas: ${linhas} linhas`);
+  console.log(`gravado na tabela vendas: ${linhas} linhas (${codigosPedidos.length} pedidos)`);
   console.log("== fim ==");
 }
 main().catch((e) => { console.error("FALHA:", e.message || e); process.exit(1); });
