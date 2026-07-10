@@ -1,0 +1,28 @@
+name: Snapshot diário do estoque
+
+on:
+  schedule:
+    - cron: "0 10 * * *"   # 10:00 UTC = 07:00 em Brasília
+  workflow_dispatch: {}     # permite rodar manualmente na aba Actions
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Coletar saldos e alertar
+        run: node scripts/snapshot.mjs
+        env:
+          CIGAM_USER: ${{ secrets.CIGAM_USER }}
+          CIGAM_PASS: ${{ secrets.CIGAM_PASS }}
+          CIGAM_PORTAL: ${{ secrets.CIGAM_PORTAL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          ALERT_EMAIL_TO: ${{ secrets.ALERT_EMAIL_TO }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
