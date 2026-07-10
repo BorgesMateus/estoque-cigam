@@ -1,7 +1,6 @@
 /**
- * Sondagem v2 da API de pedidos — valida filtro por DataPedido, $select,
- * volume retroativo e itens (Quantidade/PrecoUnitario/TotalItemLiquido).
- * Somente leitura.
+ * Sondagem v3 — range real de datas dos pedidos, campos validos no $select
+ * e itens de um pedido recente. Somente leitura.
  */
 const need = (k) => { const v = process.env[k]; if (!v) { console.error("falta env " + k); process.exit(1); } return v; };
 const BASE = process.env.CIGAM_BASE || "https://gostinhomineiroportais.cigam.cloud/api/api";
@@ -28,39 +27,47 @@ async function main() {
   const hash = await login();
   console.log("== login ok ==");
 
-  // 1) pedidos de ontem/hoje, completo (payload pequeno)
-  const f1 = await get(hash, `/comercial/fa/Pedido/Buscar?` + q({ "$filter": "DataPedido ge 2026-07-09T00:00:00Z", "$top": "2" }));
-  console.log(`[1] filtro DataPedido ge 09/07 -> HTTP ${f1.status} (${f1.ms}ms) | qtd: ${Array.isArray(f1.json) ? f1.json.length : "n/a"}`);
-  const p1 = Array.isArray(f1.json) ? f1.json[0] : f1.json;
-  console.log(JSON.stringify(p1, null, 1).slice(0, 2500));
-
-  // 2) $select para payload leve
-  const f2 = await get(hash, `/comercial/fa/Pedido/Buscar?` + q({ "$filter": "DataPedido ge 2026-07-09T00:00:00Z", "$select": "Codigo,DataPedido,Situacao,SituacaoVenda,CodigoCliente,CodigoControle", "$top": "1000" }));
-  console.log(`[2] com $select -> HTTP ${f2.status} (${f2.ms}ms) | pedidos desde 09/07: ${Array.isArray(f2.json) ? f2.json.length : JSON.stringify(f2.json)?.slice(0, 150)}`);
-  if (Array.isArray(f2.json) && f2.json[0]) console.log("    amostra:", JSON.stringify(f2.json[0]));
-
-  // 3) volume retroativo (com $select, $top alto)
-  for (const desde of ["2026-07-01", "2026-06-01", "2026-05-01", "2026-04-01"]) {
-    const f = await get(hash, `/comercial/fa/Pedido/Buscar?` + q({ "$filter": `DataPedido ge ${desde}T00:00:00Z`, "$select": "Codigo,DataPedido", "$top": "5000" }));
-    console.log(`[3] desde ${desde}: HTTP ${f.status} (${f.ms}ms) | pedidos: ${Array.isArray(f.json) ? f.json.length : "erro " + JSON.stringify(f.json)?.slice(0, 100)}`);
+  // 1) todos os pedidos, leve: range de datas + contagem por mes
+  const f = await get(hash, `/comercial/fa/Pedido/Buscar?` + q({ "$select": "Codigo,DataPedido", "$top": "10000" }));
+  const arr = Array.isArray(f.json) ? f.json : [];
+  console.log(`[1] todos c/ $select -> HTTP ${f.status} (${f.ms}ms) | pedidos: ${arr.length}`);
+  const porMes = {};
+  let min = "9999", max = "0000";
+  for (const p of arr) {
+    const d = String(p.DataPedido || "").slice(0, 10);
+    if (d < min) min = d;
+    if (d > max) max = d;
+    porMes[d.slice(0, 7)] = (porMes[d.slice(0, 7)] || 0) + 1;
   }
+  console.log(`    range: ${min} ate ${max}`);
+  console.log(`    por mes: ${JSON.stringify(porMes)}`);
 
-  // 4) itens de um pedido real
-  const cod = Array.isArray(f2.json) && f2.json[0] ? String(f2.json[0].Codigo).trim() : null;
+  // 2) campos validos no $select (um a um)
+  const candidatos = ["Situacao", "CodigoCliente", "CodigoControle", "CodigoUnidadeNegocio", "UnidadeDeNegocio", "TotalPedido", "ValorTotal", "CodigoRepresentante", "DataEntrega"];
+  const validos = [];
+  for (const c of candidatos) {
+    const t = await get(hash, `/comercial/fa/Pedido/Buscar?` + q({ "$select": `Codigo,${c}`, "$top": "1" }));
+    console.log(`[2] campo ${c}: HTTP ${t.status}${t.status === 200 && Array.isArray(t.json) && t.json[0] ? " | ex: " + JSON.stringify(t.json[0][c])?.slice(0, 60) : ""}`);
+    if (t.status === 200) validos.push(c);
+  }
+  console.log("    validos:", validos.join(", "));
+
+  // 3) pedido mais recente + itens
+  const recentes = arr.filter(p => String(p.DataPedido || "").slice(0, 10) === max);
+  console.log(`[3] pedidos na data mais recente (${max}): ${recentes.length}`);
+  const cod = recentes[0] ? String(recentes[0].Codigo).trim() : null;
   if (cod) {
     const it = await get(hash, `/comercial/fa/Pedido/BuscarItensPedido?codigoPedido=${enc(cod)}`);
-    const arr = Array.isArray(it.json) ? it.json : [];
-    console.log(`[4] itens do pedido ${cod} -> HTTP ${it.status} | itens: ${arr.length}`);
-    for (const li of arr.slice(0, 3)) {
+    const itens = Array.isArray(it.json) ? it.json : [];
+    console.log(`    itens do pedido ${cod} -> HTTP ${it.status} | ${itens.length} itens`);
+    for (const li of itens.slice(0, 4)) {
       console.log("   ", JSON.stringify({
         mat: (li.CodigoMaterial || "").trim(), qtd: li.Quantidade, preco: li.PrecoUnitario,
-        total: li.TotalItemLiquido, sit: li.Situacao,
-        desc: li.Material?.Descricao?.trim()?.slice(0, 40)
+        total: li.TotalItemLiquido, sit: li.Situacao
       }));
     }
-    const chaves = arr[0] ? Object.keys(arr[0]).join(", ") : "";
-    console.log("    chaves do item:", chaves.slice(0, 600));
+    if (itens[0]) console.log("    chaves:", Object.keys(itens[0]).join(", ").slice(0, 700));
   }
-  console.log("== fim v2 ==");
+  console.log("== fim v3 ==");
 }
 main().catch(e => { console.error("FALHA:", e.message || e); process.exit(1); });
