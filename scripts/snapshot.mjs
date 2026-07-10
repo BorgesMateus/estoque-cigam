@@ -110,12 +110,23 @@ async function main() {
     const [codigo, filial] = k.split("|");
     return { data: hoje, codigo, filial, saldo, disponivel: saldo - (reservas.get(k) || 0) };
   });
-  for (let i = 0; i < rows.length; i += 500) {
-    await sbRest("/snapshots?on_conflict=data,codigo,filial", {
-      method: "POST",
-      headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-      body: JSON.stringify(rows.slice(i, i + 500)),
-    });
+  async function gravar(linhas) {
+    for (let i = 0; i < linhas.length; i += 500) {
+      await sbRest("/snapshots?on_conflict=data,codigo,filial", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(linhas.slice(i, i + 500)),
+      });
+    }
+  }
+  try {
+    await gravar(rows);
+  } catch (e) {
+    // banco ainda sem a coluna 'disponivel' (migração pendente): grava só o saldo
+    if (String(e.message).includes("disponivel")) {
+      console.warn("coluna 'disponivel' ausente no banco — gravando só o saldo (rode a migração do schema.sql)");
+      await gravar(rows.map(({ disponivel, ...r }) => r));
+    } else { throw e; }
   }
   console.log(`snapshots gravados: ${rows.length} linhas`);
 
