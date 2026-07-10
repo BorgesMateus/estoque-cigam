@@ -178,9 +178,24 @@ const CONFIG = {
         <datalist id="dlProd"></datalist>
         <div id="prodMsg" class="muted" style="margin-top:8px"></div>
         <canvas id="chartProd"></canvas></div>
+      <div class="panel full" style="background:none;border:none;box-shadow:none;padding:4px 0 0">
+        <h3 style="font-size:15px">📈 Vendas — últimos 30 dias <span id="vendasMsg" class="muted" style="font-weight:400"></span></h3></div>
+      <div class="panel"><h3>Mais vendidos (unidades)</h3><canvas id="chartVTop"></canvas></div>
+      <div class="panel"><h3>Curva ABC (faturamento)</h3>
+        <div id="abcInfo" class="sub"></div><canvas id="chartVAbc"></canvas></div>
+      <div class="panel full"><h3>Venda por dia</h3><canvas id="chartVDia"></canvas></div>
+      <div class="panel full"><h3>Top clientes (faturamento)</h3><canvas id="chartVCli"></canvas></div>
     </div>
     <div class="toolbar">
       <input id="search" type="search" placeholder="Buscar por código ou descrição…" style="min-width:280px">
+      <select id="filStatus" title="Filtrar pela situação do item">
+        <option value="">Status: todos</option>
+        <option value="zerado">Só Zerados</option>
+        <option value="abaixo">Só Abaixo do mínimo</option>
+        <option value="problema">Zerados + Abaixo</option>
+        <option value="ok">Só OK</option>
+      </select>
+      <button id="btnIgnorados" title="Itens fora dos alertas e das análises">Ignorados (0)</button>
       <span class="spacer"></span>
       <button id="btnExport">Exportar mínimos (JSON)</button>
       <button id="btnImport">Importar mínimos (JSON)</button>
@@ -216,11 +231,13 @@ const LS_MIN  = "cigam_min_"+CONFIG.GRUPO;
 const LS_HIST = "cigam_hist_"+CONFIG.GRUPO;
 const SS_TOKEN= "cigam_token";
 let STATE = {
-  materiais: [], minimos: loadMinimos(), demanda: {},   // demanda: codigo -> média/dia
-  filial: "", sort: {key:"codigo", dir:1}, search: "",
+  materiais: [], minimos: loadMinimos(), demanda: {},   // demanda: codigo -> média/dia (junho, fallback)
+  demanda30: {}, dias30: {},                            // venda média 30d (ao vivo, do banco)
+  ignorados: new Set(), mostrarIgnorados: false,
+  filial: "", sort: {key:"codigo", dir:1}, search: "", filStatus: "",
   autoTimer: null, dbLoaded: false, avisoSync: false
 };
-let charts = {bar:null, donut:null, line:null, prod:null};
+let charts = {bar:null, donut:null, line:null, prod:null, vTop:null, vAbc:null, vDia:null, vCli:null};
 function loadMinimos(){ try{return JSON.parse(localStorage.getItem(LS_MIN))||{};}catch(e){return{};} }
 function saveMinimosLocal(){ localStorage.setItem(LS_MIN, JSON.stringify(STATE.minimos)); }
 function token(){ return sessionStorage.getItem(SS_TOKEN); }
@@ -255,14 +272,21 @@ async function dbInit(){
 async function dbCarregarTudo(){
   if(!sb || STATE.dbLoaded) return;
   try{
-    const [mins, dem] = await Promise.all([
+    const [mins, dem, ign, d30] = await Promise.all([
       sb.from('minimos').select('codigo,minimo'),
-      sb.from('demanda_ref').select('codigo,media_dia')
+      sb.from('demanda_ref').select('codigo,media_dia'),
+      sb.from('ignorados').select('codigo'),
+      sb.from('demanda_30d').select('codigo,media_dia,dias')
     ]);
     if(mins.error || dem.error) throw (mins.error || dem.error);
     (mins.data||[]).forEach(r=>{ STATE.minimos[trim(r.codigo)] = Number(r.minimo)||0; });
     saveMinimosLocal();
     (dem.data||[]).forEach(r=>{ STATE.demanda[trim(r.codigo)] = Number(r.media_dia)||0; });
+    if(!ign.error) STATE.ignorados = new Set((ign.data||[]).map(r=>trim(r.codigo)));
+    if(!d30.error) (d30.data||[]).forEach(r=>{
+      STATE.demanda30[trim(r.codigo)] = Number(r.media_dia)||0;
+      STATE.dias30[trim(r.codigo)] = Number(r.dias)||0;
+    });
     STATE.dbLoaded = true;
   }catch(e){
     console.warn("Falha ao ler banco:", e);
@@ -379,31 +403,35 @@ async function carregarDisponibilidade(onProgress){
   const itens = STATE.materiais;
   let feito = 0, falhas = 0, idx = 0;
   async function consultar(item){
-    try{
-      const r = await fetch(CONFIG.API_BASE + CONFIG.EP_DISPONIB, {
-        method: "POST",
-        headers: { "Authorization":"Bearer "+token(), "Content-Type":"application/json" },
-        body: JSON.stringify({ Origem:"ES", CodigoMaterial:item.codigo,
-          CodigoUnidadeNegocio:"001", CodigoCentroArmazenagem:"001",
-          CodigoUsuario:"", SuprimirZerados:false })
-      });
-      if(r.status === 401){ const e = new Error("401"); e.code = 401; throw e; }
-      if(!r.ok) throw new Error("HTTP "+r.status);
-      const j = await r.json();
-      const res = {};
-      (j.DemandasGerais||[]).forEach(d=>{
-        const un = trim(d.CodigoUnidadeNegocio);
-        res[un] = (res[un]||0) + (Number(d.QuantidadeSaldo)||0);
-      });
-      item.reservaPorFilial = res;
-      item.dispOk = true;
-    }catch(e){
-      if(e.code === 401) throw e;       // sessão caiu: interrompe tudo
-      item.dispOk = false; falhas++;    // falha pontual: item usa saldo físico
-    }finally{
-      feito++;
-      if(onProgress && feito % 10 === 0) onProgress(feito, itens.length);
+    // até 3 tentativas por item (falhas pontuais eram ~8% sem retry)
+    for(let tent = 1; tent <= 3; tent++){
+      try{
+        const r = await fetch(CONFIG.API_BASE + CONFIG.EP_DISPONIB, {
+          method: "POST",
+          headers: { "Authorization":"Bearer "+token(), "Content-Type":"application/json" },
+          body: JSON.stringify({ Origem:"ES", CodigoMaterial:item.codigo,
+            CodigoUnidadeNegocio:"001", CodigoCentroArmazenagem:"001",
+            CodigoUsuario:"", SuprimirZerados:false })
+        });
+        if(r.status === 401){ const e = new Error("401"); e.code = 401; throw e; }
+        if(!r.ok) throw new Error("HTTP "+r.status);
+        const j = await r.json();
+        const res = {};
+        (j.DemandasGerais||[]).forEach(d=>{
+          const un = trim(d.CodigoUnidadeNegocio);
+          res[un] = (res[un]||0) + (Number(d.QuantidadeSaldo)||0);
+        });
+        item.reservaPorFilial = res;
+        item.dispOk = true;
+        break;
+      }catch(e){
+        if(e.code === 401) throw e;       // sessão caiu: interrompe tudo
+        if(tent === 3){ item.dispOk = false; falhas++; }
+        else await new Promise(res=>setTimeout(res, 300*tent));
+      }
     }
+    feito++;
+    if(onProgress && feito % 10 === 0) onProgress(feito, itens.length);
   }
   // fila com concorrência limitada
   async function operario(){
@@ -441,7 +469,14 @@ function reservaDe(item){
 // houver mais pedido em carteira do que estoque)
 function disponivelDe(item){ return saldoDe(item) - reservaDe(item); }
 function minDe(item){ return Number(STATE.minimos[item.codigo])||0; }
-function demandaDe(item){ return Number(STATE.demanda[item.codigo])||0; }
+// Demanda viva: venda média dos últimos 30 dias (banco) quando houver pelo
+// menos 7 dias de coleta; senão, referência de junho/2026.
+function demandaDe(item){
+  if((STATE.dias30[item.codigo]||0) >= 7) return Number(STATE.demanda30[item.codigo])||0;
+  return Number(STATE.demanda[item.codigo])||0;
+}
+function ignorado(item){ return STATE.ignorados.has(item.codigo); }
+function visiveis(){ return STATE.materiais.filter(it=>!ignorado(it)); }
 // Status, cobertura e "produzir" olham para o DISPONÍVEL (o que dá pra vender)
 function coberturaDe(item){
   const d = demandaDe(item);
@@ -461,23 +496,27 @@ function statusDe(item){
    RENDER
    ===================================================================== */
 function render(){
-  const itens = STATE.materiais;
+  const itens = visiveis();   // ignorados ficam fora dos cards e gráficos
   let ok=0, ab=0, ze=0;
   itens.forEach(it=>{ const st=statusDe(it); if(st==="ok")ok++; else if(st==="abaixo")ab++; else ze++; });
   $('#cTotal').textContent = itens.length;
   $('#cOk').textContent = ok; $('#cAbaixo').textContent = ab; $('#cZero').textContent = ze;
+  $('#btnIgnorados').textContent = (STATE.mostrarIgnorados ? "Ocultar ignorados (" : "Ignorados (") + STATE.ignorados.size + ")";
   renderTabela();
   renderGraficos(ok, ab, ze);
 }
 function linhasFiltradasOrdenadas(){
   const q = STATE.search.toLowerCase();
-  let rows = STATE.materiais.map(it=>({
+  let base = STATE.mostrarIgnorados ? STATE.materiais.filter(it=>ignorado(it)) : visiveis();
+  let rows = base.map(it=>({
     it, codigo:it.codigo, descricao:it.descricao, um:it.um,
     saldo:saldoDe(it), disponivel:disponivelDe(it), dispOk:it.dispOk,
     cobertura:coberturaDe(it), min:minDe(it),
     produzir:produzirDe(it), status:statusDe(it)
   }));
   if(q) rows = rows.filter(r => r.codigo.toLowerCase().includes(q) || r.descricao.toLowerCase().includes(q));
+  if(STATE.filStatus === "problema") rows = rows.filter(r => r.status !== "ok");
+  else if(STATE.filStatus) rows = rows.filter(r => r.status === STATE.filStatus);
   const {key,dir} = STATE.sort;
   rows.sort((a,b)=>{
     let va=a[key], vb=b[key];
@@ -515,15 +554,19 @@ function renderTabela(){
         <td class="num"><input class="min" type="number" min="0" step="1"
              value="${r.min||''}" data-cod="${r.codigo}" placeholder="0"></td>
         <td class="num">${prod}</td>
-        <td><span class="status ${cls}">${label}</span></td>
+        <td><span class="status ${cls}">${label}</span>
+            <button class="ign" data-cod="${r.codigo}" title="${STATE.mostrarIgnorados ? 'Voltar a monitorar este item' : 'Ignorar este item (sai dos alertas e análises)'}"
+              style="border:none;background:none;padding:2px 4px;font-size:12px">${STATE.mostrarIgnorados ? '↩' : '✕'}</button></td>
       </tr>`;
     }).join('');
   }
-  const totReserva = STATE.materiais.reduce((a,it)=>a+reservaDe(it),0);
+  const totReserva = visiveis().reduce((a,it)=>a+reservaDe(it),0);
+  const temViva = Object.keys(STATE.demanda30).length > 0;
   $('#rowInfo').textContent = rows.length + " item(ns) exibido(s)" +
+    (STATE.mostrarIgnorados ? " · MOSTRANDO IGNORADOS" : "") +
     (STATE.filial ? " · Filial "+STATE.filial : " · Todas as filiais (somadas)") +
     " · Reservado em pedidos: " + fmt(totReserva) + " un" +
-    " · Status/cobertura/produzir usam o DISPONÍVEL · Cobertura: venda média de junho/2026";
+    " · Cobertura: " + (temViva ? "venda média dos últimos 30 dias (ao vivo)" : "venda média de junho/2026");
   tb.querySelectorAll('input.min').forEach(inp=>{
     inp.addEventListener('change', async e=>{
       const cod = e.target.dataset.cod;
@@ -534,9 +577,26 @@ function renderTabela(){
       render();
     });
   });
+  tb.querySelectorAll('button.ign').forEach(btn=>{
+    btn.addEventListener('click', async e=>{
+      const cod = e.target.dataset.cod;
+      const vaiIgnorar = !STATE.ignorados.has(cod);
+      if(vaiIgnorar) STATE.ignorados.add(cod); else STATE.ignorados.delete(cod);
+      if(sb && sbUser){
+        try{
+          if(vaiIgnorar) await sb.from('ignorados').upsert({codigo:cod, updated_by:sbUser.email});
+          else await sb.from('ignorados').delete().eq('codigo', cod);
+        }catch(err){ console.warn("ignorados:", err); }
+      } else if(sb && !STATE.avisoSync){
+        STATE.avisoSync = true;
+        showErr('Alteração de ignorados vale só neste navegador. Entre com o login da equipe para valer para todos.');
+      }
+      render();
+    });
+  });
 }
 function renderGraficos(ok, ab, ze){
-  const comMin = STATE.materiais
+  const comMin = visiveis()
     .map(it=>({d:it.descricao||it.codigo, s:disponivelDe(it), m:minDe(it)}))
     .filter(x=>x.m>0)
     .map(x=>({...x, cob: x.s/x.m}))
@@ -617,6 +677,71 @@ async function drawLineProduto(){
     options:{responsive:true, plugins:{legend:{position:'bottom'}}, scales:{y:{beginAtZero:true}}}});
 }
 /* =====================================================================
+   ANÁLISE DE VENDAS (views agregadas do banco; leve)
+   ===================================================================== */
+function nomeDe(cod){
+  const it = STATE.materiais.find(m=>m.codigo===cod);
+  const d = it ? it.descricao : cod;
+  return d.length>26 ? d.slice(0,26)+"…" : d;
+}
+const R$ = n => (Number(n)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0});
+async function renderVendas(){
+  if(!sb){ $('#vendasMsg').textContent = "— precisa do banco configurado"; return; }
+  try{
+    const [itens, clientes, dias] = await Promise.all([
+      sb.from('vendas_por_item_30d').select('codigo,qtd,valor').order('qtd',{ascending:false}).limit(500),
+      sb.from('vendas_por_cliente_30d').select('cliente,valor,pedidos').order('valor',{ascending:false}).limit(12),
+      sb.from('vendas_por_dia').select('data,qtd,valor,pedidos').order('data',{ascending:true}).limit(60)
+    ]);
+    if(itens.error || clientes.error || dias.error) throw (itens.error||clientes.error||dias.error);
+    const its = (itens.data||[]).map(r=>({cod:trim(r.codigo), qtd:Number(r.qtd)||0, valor:Number(r.valor)||0}))
+      .filter(r=>!STATE.ignorados.has(r.cod));
+    const totalValor = its.reduce((a,b)=>a+b.valor,0);
+    const totalQtd = its.reduce((a,b)=>a+b.qtd,0);
+    $('#vendasMsg').textContent = `— ${fmt(totalQtd)} un · ${R$(totalValor)} (dados do robô, pedidos de todas as situações)`;
+
+    // Top 15 por quantidade
+    const top = [...its].sort((a,b)=>b.qtd-a.qtd).slice(0,15);
+    const dTop = {labels: top.map(t=>nomeDe(t.cod)), datasets:[{label:"Unidades (30d)", data: top.map(t=>t.qtd), backgroundColor:"#0d6efd"}]};
+    if(charts.vTop){ charts.vTop.data=dTop; charts.vTop.update(); }
+    else charts.vTop = new Chart($('#chartVTop'), {type:"bar", data:dTop, options:{responsive:true, indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{beginAtZero:true}}}});
+
+    // Curva ABC por faturamento
+    const porValor = [...its].sort((a,b)=>b.valor-a.valor);
+    let acum = 0; let nA=0, nB=0, nC=0, vA=0, vB=0, vC=0;
+    porValor.forEach(r=>{
+      acum += r.valor;
+      if(acum <= totalValor*0.8){ nA++; vA+=r.valor; }
+      else if(acum <= totalValor*0.95){ nB++; vB+=r.valor; }
+      else { nC++; vC+=r.valor; }
+    });
+    $('#abcInfo').textContent = `A: ${nA} itens (80% do faturamento) · B: ${nB} itens · C: ${nC} itens`;
+    const dAbc = {labels:["A","B","C"], datasets:[{data:[vA,vB,vC], backgroundColor:["#16a34a","#f59e0b","#94a3b8"]}]};
+    if(charts.vAbc){ charts.vAbc.data=dAbc; charts.vAbc.update(); }
+    else charts.vAbc = new Chart($('#chartVAbc'), {type:"doughnut", data:dAbc, options:{responsive:true, plugins:{legend:{position:'bottom'}}}});
+
+    // Venda por dia (qtd + valor)
+    const dd = (dias.data||[]).map(r=>({dia:String(r.data).split('-').reverse().join('/').slice(0,5), qtd:Number(r.qtd)||0, valor:Number(r.valor)||0}));
+    const dDia = {labels: dd.map(x=>x.dia), datasets:[
+      {label:"Unidades", data: dd.map(x=>x.qtd), borderColor:"#0d6efd", backgroundColor:"rgba(13,110,253,.12)", fill:true, tension:.25, yAxisID:'y'},
+      {label:"Faturamento (R$)", data: dd.map(x=>x.valor), borderColor:"#16a34a", borderDash:[5,3], pointRadius:2, fill:false, tension:.25, yAxisID:'y1'}
+    ]};
+    const optDia = {responsive:true, plugins:{legend:{position:'bottom'}},
+      scales:{y:{beginAtZero:true, position:'left'}, y1:{beginAtZero:true, position:'right', grid:{drawOnChartArea:false}}}};
+    if(charts.vDia){ charts.vDia.data=dDia; charts.vDia.update(); }
+    else charts.vDia = new Chart($('#chartVDia'), {type:"line", data:dDia, options:optDia});
+
+    // Top clientes por faturamento
+    const cli = (clientes.data||[]).map(r=>({c:trim(r.cliente)||"(sem cliente)", v:Number(r.valor)||0, p:Number(r.pedidos)||0}));
+    const dCli = {labels: cli.map(x=>`${x.c} (${x.p} ped.)`), datasets:[{label:"R$ (30d)", data: cli.map(x=>x.v), backgroundColor:"#16a34a"}]};
+    if(charts.vCli){ charts.vCli.data=dCli; charts.vCli.update(); }
+    else charts.vCli = new Chart($('#chartVCli'), {type:"bar", data:dCli, options:{responsive:true, indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{beginAtZero:true}}}});
+  }catch(e){
+    console.warn("vendas:", e);
+    $('#vendasMsg').textContent = "— sem dados ainda (robô de vendas roda às 07:20)";
+  }
+}
+/* =====================================================================
    FLUXO PRINCIPAL
    ===================================================================== */
 async function atualizar(){
@@ -634,6 +759,7 @@ async function atualizar(){
     saveSnapshotLocal();
     render();                    // re-render com disponível + status finais
     drawLineProduto();
+    renderVendas();
     $('#lastUpdate').textContent = "Atualizado em " +
       new Date().toLocaleDateString('pt-BR') + " às " +
       new Date().toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'});
@@ -738,6 +864,8 @@ $('#btnRefresh').addEventListener('click', atualizar);
 $('#filFilial').addEventListener('change', e=>{ STATE.filial = e.target.value; render(); drawLineProduto(); });
 $('#autoSel').addEventListener('change', e=>setAutoRefresh(Number(e.target.value)));
 $('#search').addEventListener('input', e=>{ STATE.search = e.target.value; renderTabela(); });
+$('#filStatus').addEventListener('change', e=>{ STATE.filStatus = e.target.value; renderTabela(); });
+$('#btnIgnorados').addEventListener('click', ()=>{ STATE.mostrarIgnorados = !STATE.mostrarIgnorados; render(); });
 document.querySelectorAll('#tbl th[data-sort]').forEach(th=>{
   th.addEventListener('click', ()=>{
     const k = th.dataset.sort;
