@@ -78,10 +78,37 @@ async function main() {
     porItemFilial.set(k, (porItemFilial.get(k) || 0) + (Number(e.Saldo) || 0));
   }
 
-  // 2) Grava snapshots (upsert por data+codigo+filial)
+  // 1b) Disponibilidade: reservas de carteira de pedido por item+filial
+  //     (disponível = saldo − reservas; mesma regra da tela do CIGAM)
+  const reservas = new Map(); // "codigo|filial" -> reservado
+  const codigos = [...nomes.keys()];
+  let cursor = 0, falhasDisp = 0;
+  async function operarioDisp() {
+    while (cursor < codigos.length) {
+      const cod = codigos[cursor++];
+      try {
+        const r = await fetch(`${CIGAM_BASE}/suprimentos/es/Disponibilidade/Buscar`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${hash}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ Origem: "ES", CodigoMaterial: cod, CodigoUnidadeNegocio: "001",
+            CodigoCentroArmazenagem: "001", CodigoUsuario: "", SuprimirZerados: false }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        for (const d of j.DemandasGerais || []) {
+          const k = `${cod}|${trim(d.CodigoUnidadeNegocio)}`;
+          reservas.set(k, (reservas.get(k) || 0) + (Number(d.QuantidadeSaldo) || 0));
+        }
+      } catch (e) { falhasDisp++; }
+    }
+  }
+  await Promise.all(Array.from({ length: 8 }, operarioDisp));
+  console.log(`disponibilidade consultada: ${codigos.length} itens (${falhasDisp} falhas)`);
+
+  // 2) Grava snapshots (upsert por data+codigo+filial), com saldo e disponível
   const rows = [...porItemFilial].map(([k, saldo]) => {
     const [codigo, filial] = k.split("|");
-    return { data: hoje, codigo, filial, saldo };
+    return { data: hoje, codigo, filial, saldo, disponivel: saldo - (reservas.get(k) || 0) };
   });
   for (let i = 0; i < rows.length; i += 500) {
     await sbRest("/snapshots?on_conflict=data,codigo,filial", {
@@ -92,27 +119,29 @@ async function main() {
   }
   console.log(`snapshots gravados: ${rows.length} linhas`);
 
-  // 3) Compara com os mínimos e monta o alerta
+  // 3) Compara o DISPONÍVEL com os mínimos e monta o alerta
   const minimos = (await sbRest("/minimos?select=codigo,minimo")) || [];
-  const saldoTotal = new Map();
+  const saldoTotal = new Map(), dispTotal = new Map();
   for (const [k, s] of porItemFilial) {
     const c = k.split("|")[0];
     saldoTotal.set(c, (saldoTotal.get(c) || 0) + s);
+    dispTotal.set(c, (dispTotal.get(c) || 0) + s - (reservas.get(k) || 0));
   }
   const problemas = [];
   for (const { codigo, minimo } of minimos) {
     const min = Number(minimo) || 0;
     if (min <= 0) continue;
-    const saldo = saldoTotal.get(trim(codigo)) ?? 0;
-    if (saldo < min) problemas.push({ codigo: trim(codigo), desc: nomes.get(trim(codigo)) || "?", saldo, min });
+    const cod = trim(codigo);
+    const disp = dispTotal.get(cod) ?? 0;
+    if (disp < min) problemas.push({ codigo: cod, desc: nomes.get(cod) || "?", disp, saldo: saldoTotal.get(cod) ?? 0, min });
   }
-  problemas.sort((a, b) => a.saldo / a.min - b.saldo / b.min);
-  console.log(`itens abaixo do mínimo: ${problemas.length}`);
+  problemas.sort((a, b) => a.disp / a.min - b.disp / b.min);
+  console.log(`itens com disponível abaixo do mínimo: ${problemas.length}`);
 
   if (!problemas.length) { console.log("Tudo OK — sem alerta hoje."); return; }
 
   const linhas = problemas.map(p =>
-    `• ${p.desc} (${p.codigo}): saldo ${p.saldo.toLocaleString("pt-BR")} / mínimo ${p.min.toLocaleString("pt-BR")}${p.saldo <= 0 ? "  ⚠ ZERADO" : ""}`);
+    `• ${p.desc} (${p.codigo}): disponível ${p.disp.toLocaleString("pt-BR")} / mínimo ${p.min.toLocaleString("pt-BR")} (saldo físico ${p.saldo.toLocaleString("pt-BR")})${p.disp <= 0 ? "  ⚠ SEM DISPONÍVEL" : ""}`);
   const titulo = `⚠ Estoque: ${problemas.length} item(ns) abaixo do mínimo — ${hoje.split("-").reverse().join("/")}`;
   const corpo = `${titulo}\n\n${linhas.join("\n")}\n\nPainel: veja o link no README do repositório.`;
   console.log(corpo);
