@@ -6,6 +6,8 @@
 <title>Painel de Estoque — CIGAM (Grupo 002)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   :root{
     --bg:#f4f6f9; --card:#fff; --ink:#1f2937; --muted:#6b7280;
@@ -81,6 +83,17 @@
   .spin{display:inline-block;width:14px;height:14px;border:2px solid #cbd5e1;
         border-top-color:var(--brand);border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px}
   @keyframes sp{to{transform:rotate(360deg)}}
+  /* Abas */
+  .tabs{max-width:1280px;margin:14px auto 0;padding:0 20px;display:flex;gap:8px}
+  .tabs button{padding:9px 18px;border-radius:10px 10px 0 0;border:1px solid var(--line);
+    border-bottom:none;background:#eef1f5;font-weight:600;color:var(--muted)}
+  .tabs button.on{background:#fff;color:var(--ink);box-shadow:var(--shadow)}
+  body[data-tab="estoque"] .pv, body[data-tab="estoque"] .pm, body[data-tab="estoque"] .pp{display:none!important}
+  body[data-tab="vendas"] .pe, body[data-tab="vendas"] .pm, body[data-tab="vendas"] .pp{display:none!important}
+  body[data-tab="mapa"] .pe, body[data-tab="mapa"] .pv, body[data-tab="mapa"] .pp{display:none!important}
+  body[data-tab="pedidos"] .pe, body[data-tab="pedidos"] .pv, body[data-tab="pedidos"] .pm{display:none!important}
+  #mapa{height:520px;border-radius:12px}
+  .sitpill{display:inline-block;padding:4px 12px;border-radius:999px;font-weight:700;margin:0 6px 6px 0;border:1px solid var(--line)}
 </style>
 </head>
 <body>
@@ -156,37 +169,54 @@ const CONFIG = {
     <button id="btnRefresh" class="primary">Atualizar</button>
     <button id="btnLogout">Sair</button>
   </header>
+  <nav class="tabs">
+    <button data-tab="estoque" class="on">📦 Estoque</button>
+    <button data-tab="vendas">📈 Vendas</button>
+    <button data-tab="mapa">🗺️ Mapa</button>
+    <button data-tab="pedidos">📋 Pedidos</button>
+  </nav>
   <div class="wrap">
     <div id="err"></div>
-    <div class="cards">
+    <div class="cards pe">
       <div class="card"><div class="k">Total de itens</div><div class="v" id="cTotal">—</div></div>
       <div class="card ok"><div class="k">Itens OK</div><div class="v" id="cOk">—</div></div>
       <div class="card warn"><div class="k">Abaixo do mínimo</div><div class="v" id="cAbaixo">—</div></div>
       <div class="card danger"><div class="k">Zerados</div><div class="v" id="cZero">—</div></div>
     </div>
     <div class="charts">
-      <div class="panel"><h3>Disponível × Mínimo — itens com menor cobertura</h3>
+      <div class="panel pe"><h3>Disponível × Mínimo — itens com menor cobertura</h3>
         <canvas id="chartBar"></canvas></div>
-      <div class="panel"><h3>Distribuição de status</h3>
+      <div class="panel pe"><h3>Distribuição de status</h3>
         <canvas id="chartDonut"></canvas></div>
-      <div class="panel full"><h3>Evolução do saldo total</h3>
+      <div class="panel full pe"><h3>Evolução do saldo total</h3>
         <div class="sub" id="subTotal">Histórico do banco compartilhado (coletado pelo robô diário).</div>
         <canvas id="chartLine"></canvas></div>
-      <div class="panel full"><h3>Evolução por produto</h3>
+      <div class="panel full pe"><h3>Evolução por produto</h3>
         <div class="sub">Digite ou escolha um produto. Histórico coletado pelo robô diário.</div>
         <input id="selProd" list="dlProd" placeholder="ex.: PAO DE QUEIJO PREMIUM 30G PCT 5KG" style="min-width:340px">
         <datalist id="dlProd"></datalist>
         <div id="prodMsg" class="muted" style="margin-top:8px"></div>
         <canvas id="chartProd"></canvas></div>
-      <div class="panel full" style="background:none;border:none;box-shadow:none;padding:4px 0 0">
+      <div class="panel full pv" style="background:none;border:none;box-shadow:none;padding:4px 0 0">
         <h3 style="font-size:15px">📈 Vendas — últimos 30 dias <span id="vendasMsg" class="muted" style="font-weight:400"></span></h3></div>
-      <div class="panel"><h3>Mais vendidos (unidades)</h3><canvas id="chartVTop"></canvas></div>
-      <div class="panel"><h3>Curva ABC (faturamento)</h3>
+      <div class="panel pv"><h3>Mais vendidos (unidades)</h3><canvas id="chartVTop"></canvas></div>
+      <div class="panel pv"><h3>Curva ABC (faturamento)</h3>
         <div id="abcInfo" class="sub"></div><canvas id="chartVAbc"></canvas></div>
-      <div class="panel full"><h3>Venda por dia</h3><canvas id="chartVDia"></canvas></div>
-      <div class="panel full"><h3>Top clientes (faturamento)</h3><canvas id="chartVCli"></canvas></div>
+      <div class="panel full pv"><h3>Venda por dia — pedidos faturados (F)</h3><canvas id="chartVDia"></canvas></div>
+      <div class="panel full pv"><h3>Top clientes — faturamento (F)</h3><canvas id="chartVCli"></canvas></div>
+      <div class="panel full pm"><h3>🗺️ Mapa de calor — faturamento por cidade (30 dias, pedidos F)</h3>
+        <div id="mapaMsg" class="sub"></div>
+        <div id="mapa"></div></div>
+      <div class="panel full pp"><h3>📋 Situação dos pedidos (todo o período coletado)</h3>
+        <div id="sitPills" style="margin:8px 0 4px"></div>
+        <div class="sub">F = Faturado · C = Cancelado · L = Liberado · A e P: me confirme o significado e eu atualizo a legenda.</div></div>
+      <div class="panel pp"><h3>Pedidos por dia</h3><canvas id="chartPDia"></canvas></div>
+      <div class="panel pp"><h3>Ticket médio (F, 30d)</h3>
+        <div id="ticketInfo" style="font-size:34px;font-weight:800;margin:18px 0 6px">—</div>
+        <div class="muted" id="ticketSub"></div></div>
+      <div class="panel full pp"><h3>Desempenho por representante (30 dias, pedidos F)</h3><canvas id="chartPRep"></canvas></div>
     </div>
-    <div class="toolbar">
+    <div class="toolbar pe">
       <input id="search" type="search" placeholder="Buscar por código ou descrição…" style="min-width:280px">
       <select id="filStatus" title="Filtrar pela situação do item">
         <option value="">Status: todos</option>
@@ -201,7 +231,7 @@ const CONFIG = {
       <button id="btnImport">Importar mínimos (JSON)</button>
       <input id="fileImport" type="file" accept="application/json" class="hidden">
     </div>
-    <table id="tbl">
+    <table id="tbl" class="pe">
       <thead>
         <tr>
           <th data-sort="codigo">Código</th>
@@ -217,7 +247,7 @@ const CONFIG = {
       </thead>
       <tbody id="tbody"><tr><td colspan="9" class="muted">Carregando…</td></tr></tbody>
     </table>
-    <p class="muted" id="rowInfo" style="margin-top:10px"></p>
+    <p class="muted pe" id="rowInfo" style="margin-top:10px"></p>
   </div>
 </div>
 <script>
@@ -685,15 +715,31 @@ function nomeDe(cod){
   return d.length>26 ? d.slice(0,26)+"…" : d;
 }
 const R$ = n => (Number(n)||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0});
+// nomes de clientes/representantes (carregados por demanda, em lotes)
+STATE.cliInfo = {}; STATE.repInfo = {};
+async function carregarClientes(codigos){
+  const faltam = [...new Set(codigos.filter(c=>c && !STATE.cliInfo[c]))];
+  for(let i=0; i<faltam.length; i+=100){
+    const { data } = await sb.from('clientes').select('codigo,nome,fantasia,municipio,uf').in('codigo', faltam.slice(i,i+100));
+    (data||[]).forEach(r=>{ STATE.cliInfo[trim(r.codigo)] = {nome:trim(r.fantasia)||trim(r.nome)||trim(r.codigo), municipio:trim(r.municipio), uf:trim(r.uf)}; });
+  }
+}
+function nomeCli(c){ return (STATE.cliInfo[c] && STATE.cliInfo[c].nome) ? STATE.cliInfo[c].nome.slice(0,28) : c; }
+async function carregarReps(){
+  if(Object.keys(STATE.repInfo).length) return;
+  const { data } = await sb.from('representantes').select('codigo,nome').limit(1000);
+  (data||[]).forEach(r=>{ STATE.repInfo[trim(r.codigo)] = trim(r.nome)||trim(r.codigo); });
+}
 async function renderVendas(){
   if(!sb){ $('#vendasMsg').textContent = "— precisa do banco configurado"; return; }
   try{
     const [itens, clientes, dias] = await Promise.all([
       sb.from('vendas_por_item_30d').select('codigo,qtd,valor').order('qtd',{ascending:false}).limit(500),
-      sb.from('vendas_por_cliente_30d').select('cliente,valor,pedidos').order('valor',{ascending:false}).limit(12),
-      sb.from('vendas_por_dia').select('data,qtd,valor,pedidos').order('data',{ascending:true}).limit(60)
+      sb.from('vendas_por_cliente_sit_30d').select('cliente,situacao_pedido,valor,pedidos').eq('situacao_pedido','F').order('valor',{ascending:false}).limit(12),
+      sb.from('vendas_fat_por_dia').select('data,qtd,valor,pedidos').order('data',{ascending:true}).limit(60)
     ]);
     if(itens.error || clientes.error || dias.error) throw (itens.error||clientes.error||dias.error);
+    await carregarClientes((clientes.data||[]).map(r=>trim(r.cliente)));
     const its = (itens.data||[]).map(r=>({cod:trim(r.codigo), qtd:Number(r.qtd)||0, valor:Number(r.valor)||0}))
       .filter(r=>!STATE.ignorados.has(r.cod));
     const totalValor = its.reduce((a,b)=>a+b.valor,0);
@@ -731,9 +777,9 @@ async function renderVendas(){
     if(charts.vDia){ charts.vDia.data=dDia; charts.vDia.update(); }
     else charts.vDia = new Chart($('#chartVDia'), {type:"line", data:dDia, options:optDia});
 
-    // Top clientes por faturamento
+    // Top clientes por faturamento (F)
     const cli = (clientes.data||[]).map(r=>({c:trim(r.cliente)||"(sem cliente)", v:Number(r.valor)||0, p:Number(r.pedidos)||0}));
-    const dCli = {labels: cli.map(x=>`${x.c} (${x.p} ped.)`), datasets:[{label:"R$ (30d)", data: cli.map(x=>x.v), backgroundColor:"#16a34a"}]};
+    const dCli = {labels: cli.map(x=>`${nomeCli(x.c)} (${x.p} ped.)`), datasets:[{label:"R$ (30d)", data: cli.map(x=>x.v), backgroundColor:"#16a34a"}]};
     if(charts.vCli){ charts.vCli.data=dCli; charts.vCli.update(); }
     else charts.vCli = new Chart($('#chartVCli'), {type:"bar", data:dCli, options:{responsive:true, indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{beginAtZero:true}}}});
   }catch(e){
@@ -741,6 +787,115 @@ async function renderVendas(){
     $('#vendasMsg').textContent = "— sem dados ainda (robô de vendas roda às 07:20)";
   }
 }
+/* =====================================================================
+   MAPA DE CALOR (Leaflet) — faturamento por cidade, pedidos F, 30 dias
+   ===================================================================== */
+let mapa = null, mapaCamada = null, mapaFeito = false;
+async function renderMapa(){
+  if(!sb || mapaFeito) return;
+  try{
+    $('#mapaMsg').innerHTML = '<span class="spin"></span> montando o mapa…';
+    const { data: cli } = await sb.from('vendas_por_cliente_sit_30d')
+      .select('cliente,valor').eq('situacao_pedido','F').limit(2000);
+    const codigos = [...new Set((cli||[]).map(r=>trim(r.cliente)).filter(Boolean))];
+    await carregarClientes(codigos);
+    // agrega por cidade
+    const norm = s => trim(s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+    const porCidade = {};
+    (cli||[]).forEach(r=>{
+      const info = STATE.cliInfo[trim(r.cliente)];
+      if(!info || !info.municipio) return;
+      const k = norm(info.municipio) + "|" + info.uf.toUpperCase();
+      const o = porCidade[k] = porCidade[k] || {nome:info.municipio, uf:info.uf, valor:0, clientes:0};
+      o.valor += Number(r.valor)||0; o.clientes++;
+    });
+    // lat/lon dos municípios envolvidos
+    const chaves = Object.keys(porCidade);
+    const coords = {};
+    for(let i=0; i<chaves.length; i+=80){
+      const nomes = chaves.slice(i,i+80).map(k=>k.split("|")[0]);
+      const { data: ms } = await sb.from('municipios').select('nome_norm,uf,lat,lon').in('nome_norm', nomes);
+      (ms||[]).forEach(m=>{ coords[m.nome_norm+"|"+m.uf] = [Number(m.lat), Number(m.lon)]; });
+    }
+    if(!mapa){
+      mapa = L.map('mapa').setView([-15.8, -47.9], 8);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18, attribution: '© OpenStreetMap'}).addTo(mapa);
+    }
+    if(mapaCamada) mapaCamada.remove();
+    mapaCamada = L.layerGroup().addTo(mapa);
+    const valores = Object.values(porCidade).map(c=>c.valor);
+    const vMax = Math.max(...valores, 1);
+    let plotadas = 0; const bounds = [];
+    for(const k of chaves){
+      const c = porCidade[k];
+      const ll = coords[k];
+      if(!ll || !isFinite(ll[0])) continue;
+      const frac = c.valor / vMax;
+      L.circleMarker(ll, {
+        radius: 6 + 34 * Math.sqrt(frac),
+        color: frac > 0.5 ? "#b91c1c" : frac > 0.15 ? "#ea580c" : "#f59e0b",
+        fillColor: frac > 0.5 ? "#dc2626" : frac > 0.15 ? "#f97316" : "#fbbf24",
+        fillOpacity: 0.55, weight: 1.5
+      }).bindPopup(`<b>${c.nome} — ${c.uf}</b><br>${R$(c.valor)} em 30 dias<br>${c.clientes} cliente(s)`)
+        .addTo(mapaCamada);
+      bounds.push(ll); plotadas++;
+    }
+    if(bounds.length) mapa.fitBounds(bounds, {padding:[30,30]});
+    const totalMapa = Object.values(porCidade).reduce((a,b)=>a+b.valor,0);
+    $('#mapaMsg').textContent = `${plotadas} cidades · ${R$(totalMapa)} em pedidos faturados nos últimos 30 dias · bolha maior = mais faturamento`;
+    mapaFeito = true;
+  }catch(e){ console.warn("mapa:", e); $('#mapaMsg').textContent = "não consegui montar o mapa: " + (e.message||e); }
+}
+/* =====================================================================
+   ABA PEDIDOS — situações, pedidos/dia, ticket médio, representantes
+   ===================================================================== */
+let chartsP = {dia:null, rep:null};
+const LEGENDA_SIT = {F:"Faturado", C:"Cancelado", L:"Liberado", A:"A (?)", P:"P (?)"};
+async function renderPedidos(){
+  if(!sb) return;
+  try{
+    const [sits, dias, reps] = await Promise.all([
+      sb.from('situacoes_pedidos').select('situacao_pedido,pedidos,valor'),
+      sb.from('vendas_por_dia').select('data,pedidos,valor').order('data',{ascending:true}).limit(60),
+      sb.from('vendas_por_rep_30d').select('representante,situacao_pedido,valor,qtd,pedidos').eq('situacao_pedido','F')
+    ]);
+    await carregarReps();
+    // pills de situação
+    const cores = {F:"#dcfce7;color:#166534", C:"#fee2e2;color:#991b1b", L:"#dbeafe;color:#1e40af", A:"#fef3c7;color:#92400e", P:"#f3e8ff;color:#6b21a8"};
+    $('#sitPills').innerHTML = (sits.data||[]).sort((a,b)=>b.pedidos-a.pedidos).map(s=>{
+      const sig = trim(s.situacao_pedido)||"?";
+      return `<span class="sitpill" style="background:${(cores[sig]||"#f3f4f6;color:#374151")}">${LEGENDA_SIT[sig]||sig}: ${s.pedidos} pedidos · ${R$(s.valor)}</span>`;
+    }).join('');
+    // pedidos por dia
+    const dd = (dias.data||[]).map(r=>({dia:String(r.data).split('-').reverse().join('/').slice(0,5), p:Number(r.pedidos)||0}));
+    const dDia = {labels:dd.map(x=>x.dia), datasets:[{label:"Pedidos", data:dd.map(x=>x.p), backgroundColor:"#0d6efd"}]};
+    if(chartsP.dia){ chartsP.dia.data=dDia; chartsP.dia.update(); }
+    else chartsP.dia = new Chart($('#chartPDia'), {type:"bar", data:dDia, options:{responsive:true, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}}}});
+    // ticket médio (F, 30d)
+    const repsF = (reps.data||[]);
+    const totV = repsF.reduce((a,b)=>a+(Number(b.valor)||0),0);
+    const totP = repsF.reduce((a,b)=>a+(Number(b.pedidos)||0),0);
+    $('#ticketInfo').textContent = totP ? R$(totV/totP) : "—";
+    $('#ticketSub').textContent = `${totP} pedidos faturados · ${R$(totV)} nos últimos 30 dias`;
+    // por representante
+    const rk = repsF.map(r=>({n: STATE.repInfo[trim(r.representante)] || trim(r.representante) || "(sem rep.)", v:Number(r.valor)||0, p:Number(r.pedidos)||0}))
+      .sort((a,b)=>b.v-a.v).slice(0,12);
+    const dRep = {labels: rk.map(x=>`${x.n.slice(0,26)} (${x.p} ped.)`), datasets:[{label:"R$ (30d)", data: rk.map(x=>x.v), backgroundColor:"#0d6efd"}]};
+    if(chartsP.rep){ chartsP.rep.data=dRep; chartsP.rep.update(); }
+    else chartsP.rep = new Chart($('#chartPRep'), {type:"bar", data:dRep, options:{responsive:true, indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{beginAtZero:true}}}});
+  }catch(e){ console.warn("pedidos:", e); }
+}
+/* =====================================================================
+   ABAS
+   ===================================================================== */
+function setTab(t){
+  document.body.dataset.tab = t;
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on', b.dataset.tab===t));
+  if(t==='mapa'){ renderMapa(); setTimeout(()=>{ if(mapa) mapa.invalidateSize(); }, 120); }
+  if(t==='pedidos') renderPedidos();
+}
+document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click', ()=>setTab(b.dataset.tab)));
+document.body.dataset.tab = 'estoque';
 /* =====================================================================
    FLUXO PRINCIPAL
    ===================================================================== */
