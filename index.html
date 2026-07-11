@@ -198,18 +198,53 @@ const CONFIG = {
         <div id="prodMsg" class="muted" style="margin-top:8px"></div>
         <canvas id="chartProd"></canvas></div>
       <div class="panel full pv" style="background:none;border:none;box-shadow:none;padding:4px 0 0">
-        <h3 style="font-size:15px">📈 Vendas — últimos 30 dias <span id="vendasMsg" class="muted" style="font-weight:400"></span></h3></div>
+        <h3 style="font-size:15px">📈 Vendas <span id="vendasMsg" class="muted" style="font-weight:400"></span></h3></div>
+      <div class="panel full pv" style="padding:12px 16px">
+        <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center">
+          <b style="font-size:13px">Filtros:</b>
+          <label class="muted" style="font-size:13px">Período
+            <select id="selFvPeriodo">
+              <option value="7">7 dias</option>
+              <option value="15">15 dias</option>
+              <option value="30" selected>30 dias</option>
+              <option value="tudo">Tudo</option>
+            </select></label>
+          <label class="muted" style="font-size:13px">Representante
+            <select id="selFvRep"><option value="">Todos</option></select></label>
+          <label class="muted" style="font-size:13px">Cidade
+            <select id="selFvCidade"><option value="">Todas</option></select></label>
+          <span id="fvInfo" class="muted" style="font-size:12px"></span>
+        </div>
+      </div>
       <div class="panel pv"><h3>Mais vendidos (unidades)</h3><canvas id="chartVTop"></canvas></div>
-      <div class="panel pv"><h3>Curva ABC (faturamento)</h3>
+      <div class="panel pv"><h3>Curva ABC (faturamento F)</h3>
         <div id="abcInfo" class="sub"></div><canvas id="chartVAbc"></canvas></div>
       <div class="panel full pv"><h3>Venda por dia — pedidos faturados (F)</h3><canvas id="chartVDia"></canvas></div>
       <div class="panel full pv"><h3>Top clientes — faturamento (F)</h3><canvas id="chartVCli"></canvas></div>
+      <div class="panel full pv"><h3>😴 Clientes sumidos —
+        <label class="muted" style="font-weight:400;font-size:13px">sem comprar há
+          <select id="selFvSumido">
+            <option value="5">5+ dias</option>
+            <option value="7" selected>7+ dias</option>
+            <option value="10">10+ dias</option>
+          </select></label></h3>
+        <div id="sumidosMsg" class="sub"></div>
+        <div id="sumidosBox" style="overflow:auto"></div></div>
+      <div class="panel pv"><h3>🚀 Produtos em alta</h3>
+        <div id="tendInfo" class="sub"></div><div id="altaBox"></div></div>
+      <div class="panel pv"><h3>📉 Produtos em queda</h3>
+        <div class="sub">&nbsp;</div><div id="quedaBox"></div></div>
+      <div class="panel full pv"><h3>🧑‍💼 Raio-X por representante (pedidos F do período)</h3>
+        <div id="repsBox" style="overflow:auto"></div></div>
+      <div class="panel full pv"><h3>🏙️ Produto × cidade — top 8×8 por faturamento (F)</h3>
+        <div class="sub">Célula mais azul = mais faturamento. Mostra onde cada produto é forte (e onde tem espaço).</div>
+        <div id="matrizBox" style="overflow:auto"></div></div>
       <div class="panel full pm"><h3>🗺️ Mapa de calor — faturamento por cidade (30 dias, pedidos F)</h3>
         <div id="mapaMsg" class="sub"></div>
         <div id="mapa"></div></div>
       <div class="panel full pp"><h3>📋 Situação dos pedidos (todo o período coletado)</h3>
         <div id="sitPills" style="margin:8px 0 4px"></div>
-        <div class="sub">F = Faturado · C = Cancelado · L = Liberado · A e P: me confirme o significado e eu atualizo a legenda.</div></div>
+        <div class="sub">F = Faturado · C = Cancelado · L = Liberado · A = Aprovado · P = Pendente (fluxo do controle de pedido).</div></div>
       <div class="panel pp"><h3>Pedidos por dia</h3><canvas id="chartPDia"></canvas></div>
       <div class="panel pp"><h3>Ticket médio (F, 30d)</h3>
         <div id="ticketInfo" style="font-size:34px;font-weight:800;margin:18px 0 6px">—</div>
@@ -730,44 +765,167 @@ async function carregarReps(){
   const { data } = await sb.from('representantes').select('codigo,nome').limit(1000);
   (data||[]).forEach(r=>{ STATE.repInfo[trim(r.codigo)] = trim(r.nome)||trim(r.codigo); });
 }
+/* ---- v5.1: vendas brutas + filtros (período/representante/cidade) ---- */
+async function carregarVendasBrutas(){
+  if(STATE.vendasRaw) return STATE.vendasRaw;
+  const linhas = [];
+  for(let off=0; off<60000; off+=1000){
+    const { data, error } = await sb.from('vendas')
+      .select('data,pedido,codigo,quantidade,total,situacao_pedido,cliente,representante,un')
+      .order('data',{ascending:false}).range(off, off+999);
+    if(error) throw error;
+    linhas.push(...(data||[]));
+    if(!data || data.length < 1000) break;
+  }
+  linhas.forEach(l=>{ l.codigo=trim(l.codigo); l.cliente=trim(l.cliente); l.representante=trim(l.representante);
+    l.situacao_pedido=trim(l.situacao_pedido); l.data=String(l.data).slice(0,10);
+    l.quantidade=Number(l.quantidade)||0; l.total=Number(l.total)||0; });
+  STATE.vendasRaw = linhas;
+  await carregarReps();
+  await carregarClientes([...new Set(linhas.map(l=>l.cliente).filter(Boolean))]);
+  popularFiltrosVendas();
+  return linhas;
+}
+function cidadeDe(c){ const i=STATE.cliInfo[c]; return (i && i.municipio) ? (i.municipio+"/"+(i.uf||"")).toUpperCase() : ""; }
+function popularFiltrosVendas(){
+  const reps={}, cids={};
+  STATE.vendasRaw.forEach(l=>{ if(l.representante) reps[l.representante]=1; const cd=cidadeDe(l.cliente); if(cd) cids[cd]=1; });
+  const sr=$('#selFvRep');
+  if(sr && sr.options.length<=1) Object.keys(reps)
+    .sort((a,b)=>(STATE.repInfo[a]||a).localeCompare(STATE.repInfo[b]||b))
+    .forEach(r=>{ const o=document.createElement('option'); o.value=r; o.textContent=(STATE.repInfo[r]||r).slice(0,32); sr.appendChild(o); });
+  const sc=$('#selFvCidade');
+  if(sc && sc.options.length<=1) Object.keys(cids).sort()
+    .forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; sc.appendChild(o); });
+}
+function filtroVendas(){
+  return { dias: ($('#selFvPeriodo')||{}).value||'30', rep: ($('#selFvRep')||{}).value||'', cid: ($('#selFvCidade')||{}).value||'' };
+}
+function vendasFiltradas(comPeriodo){
+  const f = filtroVendas();
+  let corte = "";
+  if(comPeriodo && f.dias!=="tudo") corte = new Date(Date.now()-Number(f.dias)*86400000).toISOString().slice(0,10);
+  return STATE.vendasRaw.filter(l=> l.situacao_pedido!=="C"
+    && (!corte || l.data>=corte)
+    && (!f.rep || l.representante===f.rep)
+    && (!f.cid || cidadeDe(l.cliente)===f.cid)
+    && !STATE.ignorados.has(l.codigo));
+}
+function renderSumidos(base){
+  const dias = Number(($('#selFvSumido')||{}).value||7);
+  const hoje = Date.now();
+  const porCli = {};
+  base.forEach(l=>{ if(!l.cliente) return;
+    const o = porCli[l.cliente] = porCli[l.cliente] || {ult:"", v:0, ped:new Set(), rep:{}};
+    if(l.data>o.ult) o.ult=l.data; o.v+=l.total; o.ped.add(l.pedido);
+    if(l.representante) o.rep[l.representante]=(o.rep[l.representante]||0)+1; });
+  const rows=[];
+  Object.entries(porCli).forEach(([c,o])=>{
+    const dUlt = Math.floor((hoje - new Date(o.ult+"T12:00:00").getTime())/86400000);
+    if(dUlt>=dias) rows.push({c, ult:o.ult, dUlt, v:o.v, np:o.ped.size,
+      rep: Object.entries(o.rep).sort((a,b)=>b[1]-a[1]).map(x=>x[0])[0]||""});
+  });
+  rows.sort((a,b)=>b.v-a.v);
+  $('#sumidosMsg').textContent = rows.length
+    ? rows.length+" cliente(s) compravam e estão há "+dias+"+ dias sem comprar — ordenados por valor (lista pro comercial ligar!)"
+    : "Nenhum cliente sumido nesse critério 🎉";
+  $('#sumidosBox').innerHTML = rows.length ?
+    "<table style='width:100%;font-size:13px'><thead><tr><th style='text-align:left'>Cliente</th><th style='text-align:left'>Cidade</th><th style='text-align:left'>Representante</th><th class='num'>Última compra</th><th class='num'>Pedidos</th><th class='num'>R$ no histórico</th></tr></thead><tbody>"+
+    rows.slice(0,25).map(r=>"<tr><td>"+escapeHtml(nomeCli(r.c))+"</td><td>"+escapeHtml((cidadeDe(r.c)||"—").split('/')[0])+
+      "</td><td>"+escapeHtml((STATE.repInfo[r.rep]||r.rep||"—").slice(0,24))+
+      "</td><td class='num'>"+r.ult.split('-').reverse().join('/')+" <span class='muted'>(há "+r.dUlt+"d)</span></td><td class='num'>"+r.np+"</td><td class='num'><b>"+R$(r.v)+"</b></td></tr>").join("")+
+    "</tbody></table>" : "";
+}
+function renderAltaQueda(fil){
+  const datas=[...new Set(fil.map(l=>l.data))].sort();
+  if(datas.length<4){ $('#altaBox').innerHTML=$('#quedaBox').innerHTML="<div class='muted'>Período curto demais para medir tendência.</div>"; $('#tendInfo').textContent=""; return; }
+  const meio = datas[Math.floor(datas.length/2)];
+  const h={};
+  fil.forEach(l=>{ const o=h[l.codigo]=h[l.codigo]||{a:0,b:0}; if(l.data<meio) o.a+=l.quantidade; else o.b+=l.quantidade; });
+  const cands = Object.entries(h).filter(([c,o])=>o.a+o.b>=20 && o.a>0)
+    .map(([c,o])=>({c, d:(o.b-o.a)/o.a, a:o.a, b:o.b}));
+  const li = (r,cor)=>"<div style='display:flex;justify-content:space-between;gap:8px;padding:6px 4px;border-bottom:1px solid #eef2f7;font-size:13px'>"+
+    "<span>"+escapeHtml(nomeDe(r.c))+" <span class='muted'>("+fmt(r.a)+"→"+fmt(r.b)+" un)</span></span><b style='color:"+cor+"'>"+(r.d>0?"+":"")+Math.round(r.d*100)+"%</b></div>";
+  const alta=[...cands].sort((x,y)=>y.d-x.d).filter(r=>r.d>0.15).slice(0,8);
+  const queda=[...cands].sort((x,y)=>x.d-y.d).filter(r=>r.d<-0.15).slice(0,8);
+  $('#altaBox').innerHTML  = alta.length  ? alta.map(r=>li(r,"#16a34a")).join("")  : "<div class='muted'>Sem altas relevantes no período.</div>";
+  $('#quedaBox').innerHTML = queda.length ? queda.map(r=>li(r,"#dc2626")).join("") : "<div class='muted'>Sem quedas relevantes no período.</div>";
+  const dmy = s => s.slice(5).split('-').reverse().join('/');
+  $('#tendInfo').textContent = "Compara 1ª metade ("+dmy(datas[0])+"–"+dmy(meio)+") × 2ª metade do período · mín. 20 un";
+}
+function renderReps(filF){
+  const por={};
+  filF.forEach(l=>{ const o=por[l.representante]=por[l.representante]||{v:0,ped:new Set(),cli:new Set(),prod:{}};
+    o.v+=l.total; o.ped.add(l.pedido); o.cli.add(l.cliente); o.prod[l.codigo]=(o.prod[l.codigo]||0)+l.total; });
+  const tot = Object.values(por).reduce((a,b)=>a+b.v,0)||1;
+  const rows = Object.entries(por).map(([r,o])=>({r, v:o.v, np:o.ped.size, nc:o.cli.size,
+    t:o.v/(o.ped.size||1), top:Object.entries(o.prod).sort((a,b)=>b[1]-a[1]).map(x=>x[0])[0]||""}))
+    .sort((a,b)=>b.v-a.v);
+  $('#repsBox').innerHTML = "<table style='width:100%;font-size:13px'><thead><tr><th style='text-align:left'>Representante</th><th class='num'>Faturado</th><th class='num'>%</th><th class='num'>Pedidos</th><th class='num'>Clientes</th><th class='num'>Ticket médio</th><th style='text-align:left'>Produto nº 1</th></tr></thead><tbody>"+
+    rows.map(x=>"<tr><td>"+escapeHtml((STATE.repInfo[x.r]||x.r||"(sem rep.)").slice(0,28))+
+      "</td><td class='num'><b>"+R$(x.v)+"</b></td><td class='num'>"+(100*x.v/tot).toFixed(1)+"%</td><td class='num'>"+x.np+
+      "</td><td class='num'>"+x.nc+"</td><td class='num'>"+R$(x.t)+"</td><td>"+escapeHtml(nomeDe(x.top))+"</td></tr>").join("")+
+    "</tbody></table>";
+}
+function renderMatriz(filF){
+  const pv={}, cv={}, m={};
+  filF.forEach(l=>{ const cd=(cidadeDe(l.cliente)||"(sem cidade)").split('/')[0];
+    pv[l.codigo]=(pv[l.codigo]||0)+l.total; cv[cd]=(cv[cd]||0)+l.total;
+    m[l.codigo+"|"+cd]=(m[l.codigo+"|"+cd]||0)+l.total; });
+  const prods=Object.entries(pv).sort((a,b)=>b[1]-a[1]).slice(0,8).map(x=>x[0]);
+  const cids =Object.entries(cv).sort((a,b)=>b[1]-a[1]).slice(0,8).map(x=>x[0]);
+  let vmax=1; prods.forEach(p=>cids.forEach(c=>{ vmax=Math.max(vmax, m[p+"|"+c]||0); }));
+  $('#matrizBox').innerHTML = "<table style='border-collapse:collapse;width:100%;font-size:12px'><thead><tr><th style='text-align:left;padding:4px'>Produto \\ Cidade</th>"+
+    cids.map(c=>"<th style='padding:4px 6px;text-align:right'>"+escapeHtml(c.slice(0,14))+"</th>").join("")+"</tr></thead><tbody>"+
+    prods.map(p=>"<tr><td style='padding:4px;white-space:nowrap'>"+escapeHtml(nomeDe(p))+"</td>"+
+      cids.map(c=>{ const v=m[p+"|"+c]||0; const a=v/vmax;
+        return "<td style='padding:4px 6px;text-align:right;background:rgba(13,110,253,"+(a*0.75).toFixed(2)+");color:"+(a>0.55?"#fff":"#0f172a")+"'>"+(v?R$(v):"·")+"</td>"; }).join("")+
+      "</tr>").join("")+"</tbody></table>";
+}
 async function renderVendas(){
   if(!sb){ $('#vendasMsg').textContent = "— precisa do banco configurado"; return; }
   try{
-    const [itens, clientes, dias] = await Promise.all([
-      sb.from('vendas_por_item_30d').select('codigo,qtd,valor').order('qtd',{ascending:false}).limit(500),
-      sb.from('vendas_por_cliente_sit_30d').select('cliente,situacao_pedido,valor,pedidos').eq('situacao_pedido','F').order('valor',{ascending:false}).limit(12),
-      sb.from('vendas_fat_por_dia').select('data,qtd,valor,pedidos').order('data',{ascending:true}).limit(60)
-    ]);
-    if(itens.error || clientes.error || dias.error) throw (itens.error||clientes.error||dias.error);
-    await carregarClientes((clientes.data||[]).map(r=>trim(r.cliente)));
-    const its = (itens.data||[]).map(r=>({cod:trim(r.codigo), qtd:Number(r.qtd)||0, valor:Number(r.valor)||0}))
-      .filter(r=>!STATE.ignorados.has(r.cod));
-    const totalValor = its.reduce((a,b)=>a+b.valor,0);
-    const totalQtd = its.reduce((a,b)=>a+b.qtd,0);
-    $('#vendasMsg').textContent = `— ${fmt(totalQtd)} un · ${R$(totalValor)} (dados do robô, pedidos de todas as situações)`;
+    await carregarVendasBrutas();
+    if(!STATE.fvWired){ STATE.fvWired = true;
+      ["selFvPeriodo","selFvRep","selFvCidade","selFvSumido"].forEach(id=>{
+        const e=document.getElementById(id); if(e) e.addEventListener('change', ()=>renderVendas()); });
+    }
+    const f   = filtroVendas();
+    const fil = vendasFiltradas(true);                       // com período (exclui cancelados)
+    const filF= fil.filter(l=>l.situacao_pedido==="F");      // só faturados
+    const totalQtd  = fil.reduce((a,b)=>a+b.quantidade,0);
+    const totalValor= fil.reduce((a,b)=>a+b.total,0);
+    const totF      = filF.reduce((a,b)=>a+b.total,0);
+    $('#vendasMsg').textContent = `— ${fmt(totalQtd)} un · ${R$(totalValor)} no período (sem cancelados) · faturado: ${R$(totF)}`;
+    $('#fvInfo').textContent = `${fil.length} linhas · ${new Set(fil.map(l=>l.pedido)).size} pedidos` +
+      (f.rep||f.cid ? " · filtro ativo" : "");
 
     // Top 15 por quantidade
+    const porItem = {};
+    fil.forEach(l=>{ const o=porItem[l.codigo]=porItem[l.codigo]||{qtd:0,valor:0}; o.qtd+=l.quantidade; o.valor+=l.total; });
+    const its = Object.entries(porItem).map(([cod,o])=>({cod, qtd:o.qtd, valor:o.valor}));
     const top = [...its].sort((a,b)=>b.qtd-a.qtd).slice(0,15);
-    const dTop = {labels: top.map(t=>nomeDe(t.cod)), datasets:[{label:"Unidades (30d)", data: top.map(t=>t.qtd), backgroundColor:"#0d6efd"}]};
+    const dTop = {labels: top.map(t=>nomeDe(t.cod)), datasets:[{label:"Unidades", data: top.map(t=>t.qtd), backgroundColor:"#0d6efd"}]};
     if(charts.vTop){ charts.vTop.data=dTop; charts.vTop.update(); }
     else charts.vTop = new Chart($('#chartVTop'), {type:"bar", data:dTop, options:{responsive:true, indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{beginAtZero:true}}}});
 
-    // Curva ABC por faturamento
-    const porValor = [...its].sort((a,b)=>b.valor-a.valor);
-    let acum = 0; let nA=0, nB=0, nC=0, vA=0, vB=0, vC=0;
-    porValor.forEach(r=>{
-      acum += r.valor;
-      if(acum <= totalValor*0.8){ nA++; vA+=r.valor; }
-      else if(acum <= totalValor*0.95){ nB++; vB+=r.valor; }
-      else { nC++; vC+=r.valor; }
-    });
+    // Curva ABC por faturamento (F)
+    const porItemF = {};
+    filF.forEach(l=>{ porItemF[l.codigo]=(porItemF[l.codigo]||0)+l.total; });
+    const porValor = Object.entries(porItemF).map(([c,v])=>v).sort((a,b)=>b-a);
+    const totABC = porValor.reduce((a,b)=>a+b,0);
+    let acum=0, nA=0,nB=0,nC=0, vA=0,vB=0,vC=0;
+    porValor.forEach(v=>{ acum+=v;
+      if(acum<=totABC*0.8){nA++;vA+=v;} else if(acum<=totABC*0.95){nB++;vB+=v;} else {nC++;vC+=v;} });
     $('#abcInfo').textContent = `A: ${nA} itens (80% do faturamento) · B: ${nB} itens · C: ${nC} itens`;
     const dAbc = {labels:["A","B","C"], datasets:[{data:[vA,vB,vC], backgroundColor:["#16a34a","#f59e0b","#94a3b8"]}]};
     if(charts.vAbc){ charts.vAbc.data=dAbc; charts.vAbc.update(); }
     else charts.vAbc = new Chart($('#chartVAbc'), {type:"doughnut", data:dAbc, options:{responsive:true, plugins:{legend:{position:'bottom'}}}});
 
-    // Venda por dia (qtd + valor)
-    const dd = (dias.data||[]).map(r=>({dia:String(r.data).split('-').reverse().join('/').slice(0,5), qtd:Number(r.qtd)||0, valor:Number(r.valor)||0}));
+    // Venda por dia (F): unidades + R$
+    const porDia = {};
+    filF.forEach(l=>{ const o=porDia[l.data]=porDia[l.data]||{q:0,v:0}; o.q+=l.quantidade; o.v+=l.total; });
+    const dd = Object.keys(porDia).sort().map(d=>({dia:d.split('-').reverse().join('/').slice(0,5), qtd:porDia[d].q, valor:porDia[d].v}));
     const dDia = {labels: dd.map(x=>x.dia), datasets:[
       {label:"Unidades", data: dd.map(x=>x.qtd), borderColor:"#0d6efd", backgroundColor:"rgba(13,110,253,.12)", fill:true, tension:.25, yAxisID:'y'},
       {label:"Faturamento (R$)", data: dd.map(x=>x.valor), borderColor:"#16a34a", borderDash:[5,3], pointRadius:2, fill:false, tension:.25, yAxisID:'y1'}
@@ -777,11 +935,20 @@ async function renderVendas(){
     if(charts.vDia){ charts.vDia.data=dDia; charts.vDia.update(); }
     else charts.vDia = new Chart($('#chartVDia'), {type:"line", data:dDia, options:optDia});
 
-    // Top clientes por faturamento (F)
-    const cli = (clientes.data||[]).map(r=>({c:trim(r.cliente)||"(sem cliente)", v:Number(r.valor)||0, p:Number(r.pedidos)||0}));
-    const dCli = {labels: cli.map(x=>`${nomeCli(x.c)} (${x.p} ped.)`), datasets:[{label:"R$ (30d)", data: cli.map(x=>x.v), backgroundColor:"#16a34a"}]};
+    // Top clientes (F)
+    const porCli = {};
+    filF.forEach(l=>{ const o=porCli[l.cliente]=porCli[l.cliente]||{v:0,ped:new Set()}; o.v+=l.total; o.ped.add(l.pedido); });
+    const cli = Object.entries(porCli).map(([c,o])=>({c:c||"(sem cliente)", v:o.v, p:o.ped.size}))
+      .sort((a,b)=>b.v-a.v).slice(0,12);
+    const dCli = {labels: cli.map(x=>`${nomeCli(x.c)} (${x.p} ped.)`), datasets:[{label:"R$", data: cli.map(x=>x.v), backgroundColor:"#16a34a"}]};
     if(charts.vCli){ charts.vCli.data=dCli; charts.vCli.update(); }
     else charts.vCli = new Chart($('#chartVCli'), {type:"bar", data:dCli, options:{responsive:true, indexAxis:'y', plugins:{legend:{display:false}}, scales:{x:{beginAtZero:true}}}});
+
+    // Análises v5.1
+    renderSumidos(vendasFiltradas(false));   // sumidos ignoram o filtro de período
+    renderAltaQueda(fil);
+    renderReps(filF);
+    renderMatriz(filF);
   }catch(e){
     console.warn("vendas:", e);
     $('#vendasMsg').textContent = "— sem dados ainda (robô de vendas roda às 07:20)";
@@ -850,7 +1017,7 @@ async function renderMapa(){
    ABA PEDIDOS — situações, pedidos/dia, ticket médio, representantes
    ===================================================================== */
 let chartsP = {dia:null, rep:null};
-const LEGENDA_SIT = {F:"Faturado", C:"Cancelado", L:"Liberado", A:"A (?)", P:"P (?)"};
+const LEGENDA_SIT = {F:"Faturado", C:"Cancelado", L:"Liberado", A:"Aprovado", P:"Pendente"};
 async function renderPedidos(){
   if(!sb) return;
   try{
