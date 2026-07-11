@@ -1,0 +1,24 @@
+name: Atualizar cadastros (clientes/municipios)
+
+on:
+  schedule:
+    - cron: "40 10 * * 0"   # domingos 07:40 em Brasília
+  workflow_dispatch: {}
+
+jobs:
+  cadastros:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Coletar cadastros
+        run: node scripts/cadastros.mjs
+        env:
+          CIGAM_USER: ${{ secrets.CIGAM_USER }}
+          CIGAM_PASS: ${{ secrets.CIGAM_PASS }}
+          CIGAM_PORTAL: ${{ secrets.CIGAM_PORTAL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
