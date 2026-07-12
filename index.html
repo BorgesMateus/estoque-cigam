@@ -299,7 +299,7 @@ let STATE = {
   materiais: [], minimos: loadMinimos(), demanda: {},   // demanda: codigo -> média/dia (junho, fallback)
   demanda30: {}, dias30: {},                            // venda média 30d (ao vivo, do banco)
   ignorados: new Set(), mostrarIgnorados: false,
-  filial: "", sort: {key:"codigo", dir:1}, search: "", filStatus: "",
+  filial: "001", sort: {key:"codigo", dir:1}, search: "", filStatus: "",   // padrão: só a indústria (UN 001)
   autoTimer: null, dbLoaded: false, avisoSync: false
 };
 let charts = {bar:null, donut:null, line:null, prod:null, vTop:null, vAbc:null, vDia:null, vCli:null};
@@ -392,6 +392,25 @@ async function dbSalvarMinimosEmLote(obj){
 async function dbSerieTotal(){
   if(!sb) return null;
   try{
+    if(STATE.filial){
+      // evolução só da filial escolhida (agrega snapshots por dia, paginado)
+      const d0 = new Date(Date.now() - 120*86400000).toISOString().slice(0,10);
+      const porDia = {};
+      for(let off=0; off<100000; off+=1000){
+        const { data, error } = await sb.from('snapshots')
+          .select('data,saldo,disponivel').eq('filial', STATE.filial).gte('data', d0)
+          .order('data',{ascending:true}).range(off, off+999);
+        if(error) throw error;
+        (data||[]).forEach(r=>{
+          const o = porDia[r.data] = porDia[r.data] || {total:0, disp:null};
+          o.total += Number(r.saldo)||0;
+          if(r.disponivel != null) o.disp = (o.disp||0) + Number(r.disponivel);
+        });
+        if(!data || data.length < 1000) break;
+      }
+      return Object.keys(porDia).sort().map(d=>({dia: d.split('-').reverse().join('/'),
+        total: porDia[d].total, disp: porDia[d].disp}));
+    }
     const { data, error } = await sb.from('snapshots_total').select('*').order('data',{ascending:true}).limit(120);
     if(error) throw error;
     return (data||[]).map(r=>({dia: r.data.split('-').reverse().join('/'),
@@ -699,7 +718,8 @@ function saveSnapshotLocal(){
 }
 async function drawLineTotal(){
   let hist = await dbSerieTotal();
-  if(hist && hist.length){ $('#subTotal').textContent = "Histórico do banco compartilhado (coletado pelo robô diário)."; }
+  if(hist && hist.length){ $('#subTotal').textContent = "Histórico do banco compartilhado (robô diário)" +
+    (STATE.filial ? " · Filial "+STATE.filial+" apenas." : " · Todas as filiais."); }
   else { hist = loadHistLocal(); $('#subTotal').textContent = "Histórico local deste navegador (banco ainda sem dados)."; }
   const dsets = [{label:"Saldo final", data:hist.map(h=>h.total),
     borderColor:"#0d6efd", backgroundColor:"rgba(13,110,253,.12)", fill:true, tension:.25, pointRadius:3}];
@@ -1183,7 +1203,7 @@ $('#pwd').addEventListener('keydown', e=>{ if(e.key === "Enter") doLogin(); });
 $('#portal').addEventListener('keydown', e=>{ if(e.key === "Enter") doLogin(); });
 $('#btnLogout').addEventListener('click', ()=>{ sessionStorage.removeItem(SS_TOKEN); showLogin(); });
 $('#btnRefresh').addEventListener('click', atualizar);
-$('#filFilial').addEventListener('change', e=>{ STATE.filial = e.target.value; render(); drawLineProduto(); });
+$('#filFilial').addEventListener('change', e=>{ STATE.filial = e.target.value; render(); drawLineTotal(); drawLineProduto(); });
 $('#autoSel').addEventListener('change', e=>setAutoRefresh(Number(e.target.value)));
 $('#search').addEventListener('input', e=>{ STATE.search = e.target.value; renderTabela(); });
 $('#filStatus').addEventListener('change', e=>{ STATE.filStatus = e.target.value; renderTabela(); });
