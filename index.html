@@ -1199,12 +1199,27 @@ function chAddItem(texto){
 }
 async function chCriar(){
   if(CH.rodando) return; CH.rodando = true;
-  const st = addMsg("bot","⏳ Criando… (1/4 oportunidade)");
+  const st = addMsg("bot","⏳ Criando… (0/4 contato do cliente)");
   try{
     const hoje = new Date().toLocaleDateString('en-CA');
+    // 0) contato do cliente (a oportunidade exige) — busca; se não tiver, cria
+    const buscaContatos = async () => fetch(CONFIG.API_BASE+"/genericos/ge/Contato/Buscar",
+      {headers:{Authorization:"Bearer "+token()}}).then(r=>r.json()).catch(()=>[]);
+    const acha = (lista) => (Array.isArray(lista)?lista:[]).find(c=>trim(c.CodigoPessoa)===CH.cliente.codigo || trim(c.CodigoEmpresa||"")===CH.cliente.codigo);
+    let cont = acha(await buscaContatos());
+    if(!cont){
+      st.innerHTML = "⏳ Cliente sem contato — criando um (0/4)";
+      const rc = await cigamPost("/genericos/ge/Contato/Salvar",
+        {CodigoEmpresa: CH.cliente.codigo, CodigoPessoa: CH.cliente.codigo, Nome: CH.cliente.nome.split(" ")[0].slice(0,30)});
+      if(rc.st!==200 || (rc.j && rc.j.success===false)) throw new Error("Contato/Salvar → HTTP "+rc.st+" · "+JSON.stringify((rc.j&&rc.j.messages)||rc.j).slice(0,180));
+      cont = acha(await buscaContatos());
+    }
+    const codContato = cont ? Number(cont.Sequencia)||0 : 0;
+    st.innerHTML = "⏳ Contato ok ✔ (1/4 oportunidade)";
     // 1) oportunidade
     const o = await cigamPost("/comercial/ve/Oportunidade/Criar",
-      {CodigoCliente: CH.cliente.codigo, TituloDescricao: "PEDIDO VIA PAINEL "+new Date().toLocaleString('pt-BR'), Data: hoje});
+      {CodigoCliente: CH.cliente.codigo, TituloDescricao: "PEDIDO VIA PAINEL "+new Date().toLocaleString('pt-BR'), Data: hoje,
+       CodigoContato: codContato, NomeContato: cont ? trim(cont.Nome) : ""});
     if(o.st!==200 || (o.j && o.j.success===false)) throw new Error("Oportunidade/Criar → HTTP "+o.st+" · "+JSON.stringify((o.j&&o.j.messages)||o.j).slice(0,200));
     let codOp = null;
     const dd = o.j && o.j.data;
