@@ -88,6 +88,27 @@
   .tabs button{padding:9px 18px;border-radius:10px 10px 0 0;border:1px solid var(--line);
     border-bottom:none;background:#eef1f5;font-weight:600;color:var(--muted)}
   .tabs button.on{background:#fff;color:var(--ink);box-shadow:var(--shadow)}
+  /* ---- mobile ---- */
+  @media (max-width: 680px){
+    header{padding:10px 12px;gap:8px}
+    header h1{font-size:14px;flex-basis:100%}
+    header label.muted{font-size:12px}
+    button{padding:7px 10px;font-size:12px}
+    .wrap{padding:10px}
+    .cards{grid-template-columns:repeat(2,1fr);gap:8px}
+    .card .v{font-size:22px}
+    .charts{grid-template-columns:1fr;gap:10px}
+    .panel{padding:12px}
+    .panel h3{font-size:13px}
+    .tabs{padding:0 10px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .tabs button{padding:8px 12px;font-size:13px;flex:0 0 auto;white-space:nowrap}
+    .toolbar{gap:6px}
+    .toolbar input[type=search]{min-width:0!important;flex:1 1 100%}
+    table{display:block;overflow-x:auto;white-space:nowrap}
+    #tbl th,#tbl td{padding:6px 8px;font-size:12px}
+    #mapa{height:340px!important}
+    #sumidosBox table,#repsBox table{font-size:11px!important}
+  }
   body[data-tab="estoque"] .pv, body[data-tab="estoque"] .pm, body[data-tab="estoque"] .pp{display:none!important}
   body[data-tab="vendas"] .pe, body[data-tab="vendas"] .pm, body[data-tab="vendas"] .pp{display:none!important}
   body[data-tab="mapa"] .pe, body[data-tab="mapa"] .pv, body[data-tab="mapa"] .pp{display:none!important}
@@ -213,6 +234,14 @@ const CONFIG = {
             <select id="selFvRep"><option value="">Todos</option></select></label>
           <label class="muted" style="font-size:13px">Cidade
             <select id="selFvCidade"><option value="">Todas</option></select></label>
+          <label class="muted" style="font-size:13px">Linha
+            <select id="selFvLinha">
+              <option value="">Todas</option>
+              <option value="pq">🧀 Pão de queijo &amp; biscoito</option>
+              <option value="salg">🥟 Salgados</option>
+              <option value="pao">🥖 Francês &amp; massas doces</option>
+              <option value="omg">🥛 OMG (requeijão)</option>
+            </select></label>
           <span id="fvInfo" class="muted" style="font-size:12px"></span>
         </div>
       </div>
@@ -260,6 +289,13 @@ const CONFIG = {
         <option value="problema">Zerados + Abaixo</option>
         <option value="ok">Só OK</option>
       </select>
+      <select id="filLinha" title="Filtrar por linha de produto">
+        <option value="">Linha: todas</option>
+        <option value="pq">🧀 Pão de queijo &amp; biscoito</option>
+        <option value="salg">🥟 Salgados</option>
+        <option value="pao">🥖 Francês &amp; massas doces</option>
+        <option value="omg">🥛 OMG (requeijão)</option>
+      </select>
       <button id="btnIgnorados" title="Itens fora dos alertas e das análises">Ignorados (0)</button>
       <span class="spacer"></span>
       <button id="btnExport">Exportar mínimos (JSON)</button>
@@ -299,7 +335,7 @@ let STATE = {
   materiais: [], minimos: loadMinimos(), demanda: {},   // demanda: codigo -> média/dia (junho, fallback)
   demanda30: {}, dias30: {},                            // venda média 30d (ao vivo, do banco)
   ignorados: new Set(), mostrarIgnorados: false,
-  filial: "001", sort: {key:"codigo", dir:1}, search: "", filStatus: "",   // padrão: só a indústria (UN 001)
+  filial: "001", sort: {key:"codigo", dir:1}, search: "", filStatus: "", linha: "",   // padrão: só a indústria (UN 001)
   autoTimer: null, dbLoaded: false, avisoSync: false
 };
 let charts = {bar:null, donut:null, line:null, prod:null, vTop:null, vAbc:null, vDia:null, vCli:null};
@@ -560,7 +596,17 @@ function demandaDe(item){
   return Number(STATE.demanda[item.codigo])||0;
 }
 function ignorado(item){ return STATE.ignorados.has(item.codigo); }
-function visiveis(){ return STATE.materiais.filter(it=>!ignorado(it)); }
+/* linhas de produto (pela família do código) */
+const LINHAS = {pq:"Pão de queijo & biscoito", salg:"Salgados", pao:"Francês & massas doces", omg:"OMG (requeijão)"};
+function linhaDe(cod){
+  const f = String(cod||"").slice(0,6);
+  if(f==="002004"||f==="002005") return "pq";
+  if(f==="002002"||f==="002003") return "salg";
+  if(f==="002006"||f==="002007") return "pao";
+  if(f==="002001") return "omg";
+  return "outros";
+}
+function visiveis(){ return STATE.materiais.filter(it=>!ignorado(it) && (!STATE.linha || linhaDe(it.codigo)===STATE.linha)); }
 // Status, cobertura e "produzir" olham para o DISPONÍVEL (o que dá pra vender)
 function coberturaDe(item){
   const d = demandaDe(item);
@@ -819,7 +865,7 @@ function popularFiltrosVendas(){
     .forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; sc.appendChild(o); });
 }
 function filtroVendas(){
-  return { dias: ($('#selFvPeriodo')||{}).value||'30', rep: ($('#selFvRep')||{}).value||'', cid: ($('#selFvCidade')||{}).value||'' };
+  return { dias: ($('#selFvPeriodo')||{}).value||'30', rep: ($('#selFvRep')||{}).value||'', cid: ($('#selFvCidade')||{}).value||'', lin: ($('#selFvLinha')||{}).value||'' };
 }
 function vendasFiltradas(comPeriodo){
   const f = filtroVendas();
@@ -829,6 +875,7 @@ function vendasFiltradas(comPeriodo){
     && (!corte || l.data>=corte)
     && (!f.rep || l.representante===f.rep)
     && (!f.cid || cidadeDe(l.cliente)===f.cid)
+    && (!f.lin || linhaDe(l.codigo)===f.lin)
     && !STATE.ignorados.has(l.codigo));
 }
 function renderSumidos(base){
@@ -907,7 +954,7 @@ async function renderVendas(){
   try{
     await carregarVendasBrutas();
     if(!STATE.fvWired){ STATE.fvWired = true;
-      ["selFvPeriodo","selFvRep","selFvCidade","selFvSumido"].forEach(id=>{
+      ["selFvPeriodo","selFvRep","selFvCidade","selFvLinha","selFvSumido"].forEach(id=>{
         const e=document.getElementById(id); if(e) e.addEventListener('change', ()=>renderVendas()); });
     }
     const f   = filtroVendas();
@@ -1204,6 +1251,7 @@ $('#portal').addEventListener('keydown', e=>{ if(e.key === "Enter") doLogin(); }
 $('#btnLogout').addEventListener('click', ()=>{ sessionStorage.removeItem(SS_TOKEN); showLogin(); });
 $('#btnRefresh').addEventListener('click', atualizar);
 $('#filFilial').addEventListener('change', e=>{ STATE.filial = e.target.value; render(); drawLineTotal(); drawLineProduto(); });
+$('#filLinha').addEventListener('change', e=>{ STATE.linha = e.target.value; render(); });
 $('#autoSel').addEventListener('change', e=>setAutoRefresh(Number(e.target.value)));
 $('#search').addEventListener('input', e=>{ STATE.search = e.target.value; renderTabela(); });
 $('#filStatus').addEventListener('change', e=>{ STATE.filStatus = e.target.value; renderTabela(); });
