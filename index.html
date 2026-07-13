@@ -109,10 +109,22 @@
     #mapa{height:340px!important}
     #sumidosBox table,#repsBox table{font-size:11px!important}
   }
-  body[data-tab="estoque"] .pv, body[data-tab="estoque"] .pm, body[data-tab="estoque"] .pp{display:none!important}
-  body[data-tab="vendas"] .pe, body[data-tab="vendas"] .pm, body[data-tab="vendas"] .pp{display:none!important}
-  body[data-tab="mapa"] .pe, body[data-tab="mapa"] .pv, body[data-tab="mapa"] .pp{display:none!important}
-  body[data-tab="pedidos"] .pe, body[data-tab="pedidos"] .pv, body[data-tab="pedidos"] .pm{display:none!important}
+  body[data-tab="estoque"] .pv, body[data-tab="estoque"] .pm, body[data-tab="estoque"] .pp, body[data-tab="estoque"] .px{display:none!important}
+  body[data-tab="vendas"] .pe, body[data-tab="vendas"] .pm, body[data-tab="vendas"] .pp, body[data-tab="vendas"] .px{display:none!important}
+  body[data-tab="mapa"] .pe, body[data-tab="mapa"] .pv, body[data-tab="mapa"] .pp, body[data-tab="mapa"] .px{display:none!important}
+  body[data-tab="pedidos"] .pe, body[data-tab="pedidos"] .pv, body[data-tab="pedidos"] .pm, body[data-tab="pedidos"] .px{display:none!important}
+  body[data-tab="criar"] .pe, body[data-tab="criar"] .pv, body[data-tab="criar"] .pm, body[data-tab="criar"] .pp{display:none!important}
+  /* chat de pedidos */
+  #chatBox{height:440px;overflow-y:auto;background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:8px}
+  .msg{max-width:78%;padding:9px 13px;border-radius:14px;font-size:13.5px;line-height:1.45;white-space:pre-wrap}
+  .msg.bot{background:#fff;border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
+  .msg.eu{background:#0d6efd;color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+  .msg table{border-collapse:collapse;margin:4px 0;font-size:12.5px}
+  .msg td,.msg th{border:1px solid #e2e8f0;padding:3px 8px;text-align:left}
+  .msg .opc{display:inline-block;margin:2px 4px 2px 0;padding:4px 10px;background:#eef2ff;border:1px solid #c7d2fe;border-radius:999px;cursor:pointer;font-size:12.5px}
+  .msg .opc:hover{background:#e0e7ff}
+  .msg button.go{background:#16a34a;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-weight:700;margin:6px 6px 2px 0}
+  .msg button.nogo{background:#fff;border:1px solid var(--line);padding:8px 14px;border-radius:8px;margin:6px 0 2px 0}
   #mapa{height:520px;border-radius:12px}
   .sitpill{display:inline-block;padding:4px 12px;border-radius:999px;font-weight:700;margin:0 6px 6px 0;border:1px solid var(--line)}
 </style>
@@ -195,6 +207,7 @@ const CONFIG = {
     <button data-tab="vendas">📈 Vendas</button>
     <button data-tab="mapa">🗺️ Mapa</button>
     <button data-tab="pedidos">📋 Pedidos</button>
+    <button data-tab="criar">🛒 Criar pedido</button>
   </nav>
   <div class="wrap">
     <div id="err"></div>
@@ -279,6 +292,13 @@ const CONFIG = {
         <div id="ticketInfo" style="font-size:34px;font-weight:800;margin:18px 0 6px">—</div>
         <div class="muted" id="ticketSub"></div></div>
       <div class="panel full pp"><h3>Desempenho por representante (30 dias, pedidos F)</h3><canvas id="chartPRep"></canvas></div>
+      <div class="panel full px"><h3>🛒 Criar pedido — assistente</h3>
+        <div class="sub">Me diga o cliente e os itens; eu monto o pedido e você confirma. Ele entra no CIGAM via API como oportunidade convertida em pedido (nasce Pendente — nada fatura sozinho).</div>
+        <div id="chatBox"></div>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <input id="chatIn" placeholder="digite aqui… (ex.: pedido para Mateus Borges)" style="flex:1">
+          <button id="chatSend" class="primary">Enviar</button>
+        </div></div>
     </div>
     <div class="toolbar pe">
       <input id="search" type="search" placeholder="Buscar por código ou descrição…" style="min-width:280px">
@@ -1120,6 +1140,123 @@ async function renderPedidos(){
   }catch(e){ console.warn("pedidos:", e); }
 }
 /* =====================================================================
+   CHAT DE PEDIDOS (aba Criar) — cria pedido via API: Oportunidade → Pedido
+   ===================================================================== */
+const CH = { etapa:"cliente", cliente:null, itens:[], opcoes:null, pendente:null, rodando:false, iniciado:false };
+function chNorm(s){ return trim(s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,''); }
+function addMsg(quem, html){
+  const box = $('#chatBox'); const d = document.createElement('div');
+  d.className = "msg "+quem; d.innerHTML = html;
+  box.appendChild(d); box.scrollTop = box.scrollHeight; return d;
+}
+async function cigamPost(path, body, qs){
+  const r = await fetch(CONFIG.API_BASE+path+(qs||""), {method:"POST",
+    headers:{Authorization:"Bearer "+token(), "Content-Type":"application/json"},
+    body: body?JSON.stringify(body):"{}"});
+  const j = await r.json().catch(()=>null);
+  return { st:r.status, j };
+}
+function chResumo(){
+  const linhas = CH.itens.map((it,i)=>`<tr><td>${i+1}</td><td>${escapeHtml(it.desc)}</td><td>${fmt(it.qtd)} ${it.um}</td></tr>`).join("");
+  addMsg("bot", `Confere o pedido:<br><b>Cliente:</b> ${escapeHtml(CH.cliente.nome)} (${CH.cliente.codigo})<table><tr><th>#</th><th>Produto</th><th>Qtd</th></tr>${linhas}</table>`+
+    `<button class="go" onclick="chCriar()">✅ Criar pedido no CIGAM</button><button class="nogo" onclick="addMsg('bot','Beleza — pode mandar mais itens, ou <i>remover N</i>, ou <i>cancelar</i>.')">✏️ Editar</button>`);
+}
+async function chBuscarCliente(termo){
+  if(!sb){ addMsg("bot","Preciso do banco configurado pra buscar clientes."); return; }
+  const t = trim(termo).replace(/^pedido (para|pro|pra)\s+/i,"");
+  let q = sb.from('clientes').select('codigo,nome,fantasia,municipio').limit(6);
+  q = /^\d{3,6}$/.test(t) ? q.eq('codigo', t.padStart(6,'0')) : q.or(`nome.ilike.%${t}%,fantasia.ilike.%${t}%`);
+  const { data } = await q;
+  const ops = (data||[]).map(c=>({codigo:trim(c.codigo), nome:trim(c.fantasia)||trim(c.nome), cidade:trim(c.municipio)}));
+  if(!ops.length){ addMsg("bot","Não achei cliente com \""+escapeHtml(t)+"\". Tenta outro pedaço do nome ou o código."); return; }
+  if(ops.length===1){ CH.cliente = ops[0]; CH.etapa = "itens";
+    addMsg("bot", `Cliente: <b>${escapeHtml(ops[0].nome)}</b> (${ops[0].codigo} · ${escapeHtml(ops[0].cidade||"?")}) ✔<br>Agora os itens — um por mensagem, tipo: <i>2x premium 30g 1kg</i>. Quando acabar, digite <b>pronto</b>.`);
+    return; }
+  CH.opcoes = ops; CH.etapa = "cliente-escolha";
+  addMsg("bot", "Achei mais de um — clica ou digita o número:<br>"+ops.map((o,i)=>`<span class="opc" onclick="chEscolha(${i})">${i+1}. ${escapeHtml(o.nome)} · ${escapeHtml(o.cidade||"?")} (${o.codigo})</span>`).join("<br>"));
+}
+function chEscolha(i){
+  const o = (CH.opcoes||[])[i]; if(!o) return;
+  if(CH.etapa==="cliente-escolha"){ CH.cliente=o; CH.etapa="itens";
+    addMsg("bot", `Cliente: <b>${escapeHtml(o.nome)}</b> (${o.codigo}) ✔<br>Agora os itens: <i>2x premium 30g 1kg</i>… e <b>pronto</b> pra fechar.`); }
+  else if(CH.etapa==="item-escolha"){ CH.itens.push({cod:o.codigo, desc:o.nome, um:o.um, qtd:CH.pendente});
+    CH.etapa="itens"; addMsg("bot", `+ ${fmt(CH.pendente)} ${o.um} de ${escapeHtml(o.nome)} ✔ (${CH.itens.length} item(ns)). Mais algum? Ou <b>pronto</b>.`); }
+  CH.opcoes=null;
+}
+function chAddItem(texto){
+  const m = texto.match(/^([\d.,]+)\s*x?\s+(.+)$/i);
+  if(!m){ addMsg("bot","Formato: <i>quantidade produto</i> — ex.: <i>2 premium 30g 1kg</i>. Ou <b>pronto</b> / <b>cancelar</b>."); return; }
+  const qtd = parseFloat(m[1].replace('.','').replace(',','.')) || parseFloat(m[1]);
+  const termo = chNorm(m[2]);
+  const toks = termo.split(/\s+/).filter(Boolean);
+  const cands = STATE.materiais.filter(it=>{ const d=chNorm(it.descricao); return toks.every(tk=>d.includes(tk)); });
+  if(!cands.length){ addMsg("bot","Não achei produto com \""+escapeHtml(m[2])+"\" — tenta outras palavras (ex.: parte do nome + peso)."); return; }
+  if(cands.length===1){ const p=cands[0]; CH.itens.push({cod:p.codigo, desc:p.descricao, um:p.um, qtd});
+    addMsg("bot", `+ ${fmt(qtd)} ${p.um} de ${escapeHtml(p.descricao)} ✔ (${CH.itens.length} item(ns)). Mais algum? Ou <b>pronto</b>.`); return; }
+  CH.pendente = qtd; CH.opcoes = cands.slice(0,6).map(p=>({codigo:p.codigo, nome:p.descricao, um:p.um}));
+  CH.etapa = "item-escolha";
+  addMsg("bot","Qual deles?<br>"+CH.opcoes.map((o,i)=>`<span class="opc" onclick="chEscolha(${i})">${i+1}. ${escapeHtml(o.nome)}</span>`).join("<br>"));
+}
+async function chCriar(){
+  if(CH.rodando) return; CH.rodando = true;
+  const st = addMsg("bot","⏳ Criando… (1/4 oportunidade)");
+  try{
+    const hoje = new Date().toLocaleDateString('en-CA');
+    // 1) oportunidade
+    const o = await cigamPost("/comercial/ve/Oportunidade/Criar",
+      {CodigoCliente: CH.cliente.codigo, TituloDescricao: "PEDIDO VIA PAINEL "+new Date().toLocaleString('pt-BR'), Data: hoje});
+    if(o.st!==200 || (o.j && o.j.success===false)) throw new Error("Oportunidade/Criar → HTTP "+o.st+" · "+JSON.stringify((o.j&&o.j.messages)||o.j).slice(0,200));
+    let codOp = null;
+    const dd = o.j && o.j.data;
+    if(dd!=null){ codOp = (typeof dd==="object") ? (dd.Codigo??dd.codigo??dd.CodigoOportunidade) : dd; }
+    if(codOp==null) throw new Error("Oportunidade criada mas sem código no retorno: "+JSON.stringify(o.j).slice(0,200));
+    st.innerHTML = "⏳ Oportunidade "+codOp+" ✔ (2/4 convertendo em pedido)";
+    // 2) pedido a partir da oportunidade
+    const p = await cigamPost("/comercial/ve/Oportunidade/CriarPedido", null, "?codigoOportunidade="+encodeURIComponent(codOp));
+    if(p.st!==200 || (p.j && p.j.success===false)) throw new Error("CriarPedido → HTTP "+p.st+" · "+JSON.stringify((p.j&&p.j.messages)||p.j).slice(0,200));
+    let codPed = null; const pd = p.j && p.j.data;
+    if(pd!=null){ codPed = (typeof pd==="object") ? (pd.Codigo??pd.codigo??pd.CodigoPedido) : pd; }
+    if(codPed==null) throw new Error("Pedido criado mas sem código no retorno: "+JSON.stringify(p.j).slice(0,250));
+    codPed = trim(String(codPed));
+    st.innerHTML = "⏳ Pedido "+codPed+" ✔ (3/4 lançando "+CH.itens.length+" item(ns))";
+    // 3) itens
+    for(let i=0;i<CH.itens.length;i++){
+      const it = CH.itens[i];
+      const ri = await cigamPost("/comercial/fa/Pedido/SalvarItemPedido",
+        {CodigoPedido: codPed, Sequencia: i+1, CodigoMaterial: it.cod, Quantidade: it.qtd});
+      if(ri.st!==200 || (ri.j && ri.j.success===false)) throw new Error("Item "+(i+1)+" ("+it.desc.slice(0,20)+") → HTTP "+ri.st+" · "+JSON.stringify((ri.j&&ri.j.messages)||ri.j).slice(0,180));
+    }
+    st.innerHTML = "⏳ Itens ✔ (4/4 conferindo)";
+    // 4) conferência
+    const chk = await fetch(CONFIG.API_BASE+"/comercial/fa/Pedido/BuscarItensPedido?codigoPedido="+encodeURIComponent(codPed),
+      {headers:{Authorization:"Bearer "+token()}}).then(r=>r.json()).catch(()=>null);
+    const its = Array.isArray(chk)?chk:[];
+    const tot = its.reduce((a,b)=>a+(Number(b.TotalItemLiquido)||0),0);
+    st.innerHTML = `🎉 <b>Pedido ${codPed} criado no CIGAM!</b><br>Cliente ${escapeHtml(CH.cliente.nome)} · ${its.length} item(ns) no sistema · total ${tot?R$(tot):"(preço a calcular)"}<br><span class="muted">Nasceu via oportunidade — confere no portal e me diz se precisa ajustar.</span>`;
+    CH.etapa="fim"; CH.rodando=false;
+    addMsg("bot","Quer fazer outro? Digite <b>novo pedido</b>.");
+  }catch(e){
+    CH.rodando=false;
+    st.innerHTML = "❌ Deu ruim: "+escapeHtml(String(e.message||e))+"<br><span class='muted'>Nada além do que foi confirmado acima foi criado. Se aparecer 'Ocorreu uma falha' é o direito de escrita (FAPEDIDO_C/VEVENDAS_C) faltando pro usuário na API — manda esse print pro suporte CIGAM.</span>";
+  }
+}
+function chEntrada(){
+  const inp = $('#chatIn'); const t = trim(inp.value); if(!t) return;
+  inp.value = ""; addMsg("eu", escapeHtml(t));
+  const low = t.toLowerCase();
+  if(/^cancelar/.test(low)){ CH.etapa="cliente"; CH.cliente=null; CH.itens=[]; addMsg("bot","Cancelado. Pra quem é o próximo pedido?"); return; }
+  if(/^novo pedido/.test(low)){ CH.etapa="cliente"; CH.cliente=null; CH.itens=[]; addMsg("bot","Bora! Qual o cliente?"); return; }
+  if(/^remover\s+(\d+)/.test(low) && CH.itens.length){ const n=parseInt(low.match(/^remover\s+(\d+)/)[1],10);
+    if(CH.itens[n-1]){ const rm=CH.itens.splice(n-1,1)[0]; addMsg("bot","Removi "+escapeHtml(rm.desc)+". "+(CH.itens.length?"Sobrou "+CH.itens.length+".":"Lista vazia.")); } return; }
+  if(CH.etapa==="cliente"){ chBuscarCliente(t); return; }
+  if(CH.etapa==="cliente-escolha" || CH.etapa==="item-escolha"){
+    const n = parseInt(t,10); if(n>=1 && CH.opcoes && CH.opcoes[n-1]){ chEscolha(n-1); } else addMsg("bot","Digita só o número da opção 😉"); return; }
+  if(CH.etapa==="itens" || CH.etapa==="fim"){
+    if(/^(pronto|fechar|finalizar)/.test(low)){ if(!CH.itens.length){ addMsg("bot","Sem itens ainda! Manda tipo: <i>2 premium 30g 1kg</i>."); return; } chResumo(); return; }
+    if(CH.etapa==="fim"){ CH.etapa="cliente"; CH.cliente=null; CH.itens=[]; chBuscarCliente(t); return; }
+    chAddItem(t); return; }
+}
+/* =====================================================================
    ABAS
    ===================================================================== */
 function setTab(t){
@@ -1127,6 +1264,11 @@ function setTab(t){
   document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on', b.dataset.tab===t));
   if(t==='mapa'){ renderMapa(); setTimeout(()=>{ if(mapa) mapa.invalidateSize(); }, 120); }
   if(t==='pedidos') renderPedidos();
+  if(t==='criar' && !CH.iniciado){ CH.iniciado = true;
+    addMsg("bot","Opa! 🛒 Vou te ajudar a lançar um pedido no CIGAM.\nPra quem é? Digita parte do nome do cliente (ou o código).");
+    $('#chatSend').addEventListener('click', chEntrada);
+    $('#chatIn').addEventListener('keydown', e=>{ if(e.key==='Enter') chEntrada(); });
+  }
 }
 document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click', ()=>setTab(b.dataset.tab)));
 document.body.dataset.tab = 'estoque';
