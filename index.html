@@ -1223,14 +1223,14 @@ async function chCriar(){
     if(o.st!==200 || (o.j && o.j.success===false)) throw new Error("Oportunidade/Criar → HTTP "+o.st+" · "+JSON.stringify((o.j&&o.j.messages)||o.j).slice(0,200));
     let codOp = null;
     const dd = o.j && o.j.data;
-    if(dd!=null){ codOp = (typeof dd==="object") ? (dd.Codigo??dd.codigo??dd.CodigoOportunidade) : dd; }
+    if(dd!=null){ codOp = (typeof dd==="object") ? (dd.Codigo??dd.codigo??dd.CodigoOportunidade??dd.codigoOportunidade) : dd; }
     if(codOp==null) throw new Error("Oportunidade criada mas sem código no retorno: "+JSON.stringify(o.j).slice(0,200));
     st.innerHTML = "⏳ Oportunidade "+codOp+" ✔ (2/4 convertendo em pedido)";
     // 2) pedido a partir da oportunidade
     const p = await cigamPost("/comercial/ve/Oportunidade/CriarPedido", null, "?codigoOportunidade="+encodeURIComponent(codOp));
     if(p.st!==200 || (p.j && p.j.success===false)) throw new Error("CriarPedido → HTTP "+p.st+" · "+JSON.stringify((p.j&&p.j.messages)||p.j).slice(0,200));
     let codPed = null; const pd = p.j && p.j.data;
-    if(pd!=null){ codPed = (typeof pd==="object") ? (pd.Codigo??pd.codigo??pd.CodigoPedido) : pd; }
+    if(pd!=null){ codPed = (typeof pd==="object") ? (pd.Codigo??pd.codigo??pd.CodigoPedido??pd.codigoPedido) : pd; }
     if(codPed==null) throw new Error("Pedido criado mas sem código no retorno: "+JSON.stringify(p.j).slice(0,250));
     codPed = trim(String(codPed));
     st.innerHTML = "⏳ Pedido "+codPed+" ✔ (3/4 lançando "+CH.itens.length+" item(ns))";
