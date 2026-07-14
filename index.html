@@ -1199,18 +1199,29 @@ function chAddItem(texto){
 }
 async function chCriar(){
   if(CH.rodando) return; CH.rodando = true;
-  // v7.2 (modo teste): deixa o pedido pronto no navegador — o assistente (Claude) executa a receita no portal
-  const pedido = {
-    quando: new Date().toISOString(),
-    cliente_codigo: CH.cliente.codigo,
-    cliente_nome: CH.cliente.nome,
-    cliente_query: CH.cliente.nome + " | " + CH.cliente.nome,
-    itens: CH.itens.map(i=>({codigo:i.cod, desc:i.desc, um:i.um, qtd:i.qtd}))
-  };
-  localStorage.setItem('pedido_pronto', JSON.stringify(pedido));
-  addMsg("bot","✅ <b>Pedido pronto e guardado!</b><br>Agora é só falar <b>\"manda ver\"</b> pro primo lá na conversa do Claude — ele pega daqui e cria no CIGAM na hora, te devolvendo o número. 🤖<br><span class='muted'>(modo teste — depois a gente pluga o robô automático do jeito de vocês)</span>");
-  CH.etapa="fim"; CH.rodando=false;
-  return;
+  // v8: chama a Edge Function do Supabase — cria o pedido no CIGAM na hora (sem CORS, sem fila, sem ninguém)
+  const stF = addMsg("bot","⏳ Criando o pedido no CIGAM…");
+  try{
+    const r = await fetch(CONFIG.SUPABASE_URL + "/functions/v1/criar-pedido", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json", "apikey": CONFIG.SUPABASE_ANON_KEY, "Authorization":"Bearer "+CONFIG.SUPABASE_ANON_KEY },
+      body: JSON.stringify({
+        clienteCode: CH.cliente.codigo,
+        tabelaPreco: "003",
+        observacao: "PEDIDO VIA PAINEL",
+        items: CH.itens.map(i=>({ codigoProduto: i.cod, quantidade: i.qtd, unidadeMedida: i.um || "KG" }))
+      })
+    });
+    const j = await r.json().catch(()=>null);
+    if(!j || !j.ok) throw new Error((j && j.erro) || ("HTTP "+r.status));
+    stF.innerHTML = "🎉 <b>Pedido "+escapeHtml(j.cigamOrderId)+" criado no CIGAM!</b><br>Cliente "+escapeHtml(CH.cliente.nome)+" · "+CH.itens.length+" item(ns) · confere no portal. Digite <b>novo pedido</b> pra fazer outro.";
+    CH.etapa="fim"; CH.rodando=false;
+    return;
+  }catch(e){
+    CH.rodando=false;
+    stF.innerHTML = "❌ Não consegui criar: "+escapeHtml(String(e.message||e))+"<br><span class='muted'>Se disser 'secrets não configurados', falta ligar o usuário/senha do CIGAM na função (a gente faz isso uma vez).</span>";
+    return;
+  }
 }
 async function chCriarViaApiRest(){   // (fluxo antigo via API REST — guardado p/ quando a CIGAM liberar o Salvar)
   if(CH.rodando) return; CH.rodando = true;
