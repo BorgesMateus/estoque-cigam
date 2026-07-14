@@ -1200,7 +1200,6 @@ function chAddItem(texto){
 async function chCriar(){
   if(CH.rodando) return; CH.rodando = true;
   // v7: grava na FILA (o robô do GitHub cria no CIGAM pelo fluxo do portal)
-  if(!sbUser){ CH.rodando=false; addMsg("bot","Pra enviar pro robô, entra primeiro com o login de equipe (botão <b>Equipe: entrar</b> lá em cima) — é ele que autoriza a gravação na fila."); return; }
   const stF = addMsg("bot","⏳ Enviando pra fila do robô…");
   try{
     const { data, error } = await sb.from('fila_pedidos').insert({
@@ -1208,7 +1207,7 @@ async function chCriar(){
       cliente_nome: CH.cliente.nome,
       cliente_query: CH.cliente.nome + " | " + CH.cliente.nome,
       itens: CH.itens.map(i=>({codigo:i.cod, desc:i.desc, um:i.um, qtd:i.qtd})),
-      obs: "PEDIDO VIA PAINEL - " + (sbUser.email||"equipe")
+      obs: "PEDIDO VIA PAINEL - " + ((sbUser&&sbUser.email)||"TESTE MATEUS")
     }).select('id').single();
     if(error) throw error;
     const fid = data.id;
