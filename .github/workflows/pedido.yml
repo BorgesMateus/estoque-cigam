@@ -1,0 +1,23 @@
+name: Robô de pedidos (fila)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # a cada 5 min confere a fila
+  workflow_dispatch: {}
+
+jobs:
+  pedidos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Processar fila de pedidos
+        run: node scripts/pedido.mjs
+        env:
+          PORTAL_USER: ${{ secrets.PORTAL_USER || secrets.CIGAM_USER }}
+          PORTAL_PASS: ${{ secrets.PORTAL_PASS || secrets.CIGAM_PASS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
