@@ -1199,34 +1199,18 @@ function chAddItem(texto){
 }
 async function chCriar(){
   if(CH.rodando) return; CH.rodando = true;
-  // v7: grava na FILA (o robô do GitHub cria no CIGAM pelo fluxo do portal)
-  const stF = addMsg("bot","⏳ Enviando pra fila do robô…");
-  try{
-    const { data, error } = await sb.from('fila_pedidos').insert({
-      cliente_codigo: CH.cliente.codigo,
-      cliente_nome: CH.cliente.nome,
-      cliente_query: CH.cliente.nome + " | " + CH.cliente.nome,
-      itens: CH.itens.map(i=>({codigo:i.cod, desc:i.desc, um:i.um, qtd:i.qtd})),
-      obs: "PEDIDO VIA PAINEL - " + ((sbUser&&sbUser.email)||"TESTE MATEUS")
-    }).select('id').single();
-    if(error) throw error;
-    const fid = data.id;
-    stF.innerHTML = "📨 Na fila (nº "+fid+")! O robô roda em até ~5 min. Acompanhando…";
-    CH.etapa="fim"; CH.rodando=false;
-    let tent = 0;
-    const timer = setInterval(async ()=>{
-      tent++;
-      const { data: st } = await sb.from('fila_pedidos').select('status,pedido_criado,erro').eq('id', fid).single();
-      if(!st) return;
-      if(st.status==='criado'){ clearInterval(timer);
-        stF.innerHTML = "🎉 <b>Pedido "+escapeHtml(st.pedido_criado)+" criado no CIGAM!</b><br>Cliente "+escapeHtml(CH.cliente?CH.cliente.nome:"")+" — confere no portal. Digite <b>novo pedido</b> pra fazer outro."; }
-      else if(st.status==='erro'){ clearInterval(timer);
-        stF.innerHTML = "❌ O robô encontrou um erro: "+escapeHtml(st.erro||"?")+"<br><span class='muted'>O pedido ficou na fila como 'erro' — me chama que a gente resolve.</span>"; }
-      else if(st.status==='processando'){ stF.innerHTML = "⚙️ Robô processando (fila nº "+fid+")…"; }
-      if(tent>120) clearInterval(timer);
-    }, 10000);
-    return;
-  }catch(e){ CH.rodando=false; stF.innerHTML = "❌ Não consegui gravar na fila: "+escapeHtml(String(e.message||e)); return; }
+  // v7.2 (modo teste): deixa o pedido pronto no navegador — o assistente (Claude) executa a receita no portal
+  const pedido = {
+    quando: new Date().toISOString(),
+    cliente_codigo: CH.cliente.codigo,
+    cliente_nome: CH.cliente.nome,
+    cliente_query: CH.cliente.nome + " | " + CH.cliente.nome,
+    itens: CH.itens.map(i=>({codigo:i.cod, desc:i.desc, um:i.um, qtd:i.qtd}))
+  };
+  localStorage.setItem('pedido_pronto', JSON.stringify(pedido));
+  addMsg("bot","✅ <b>Pedido pronto e guardado!</b><br>Agora é só falar <b>\"manda ver\"</b> pro primo lá na conversa do Claude — ele pega daqui e cria no CIGAM na hora, te devolvendo o número. 🤖<br><span class='muted'>(modo teste — depois a gente pluga o robô automático do jeito de vocês)</span>");
+  CH.etapa="fim"; CH.rodando=false;
+  return;
 }
 async function chCriarViaApiRest(){   // (fluxo antigo via API REST — guardado p/ quando a CIGAM liberar o Salvar)
   if(CH.rodando) return; CH.rodando = true;
