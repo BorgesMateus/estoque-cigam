@@ -68,6 +68,20 @@ async function main() {
   }
   console.log(`materiais no grupo: ${nomes.size}`);
 
+  // 1a) Atualiza o CATALOGO (tabela materiais) - descricoes em dia e produtos novos aparecem
+  //     sozinhos. So grava codigo+descricao; preserva a coluna 'um' ja existente.
+  const catRows = [...nomes].map(([codigo, descricao]) => ({ codigo, descricao, atualizado_em: new Date().toISOString() }));
+  try {
+    for (let i = 0; i < catRows.length; i += 500) {
+      await sbRest("/materiais?on_conflict=codigo", {
+        method: "POST",
+        headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(catRows.slice(i, i + 500)),
+      });
+    }
+    console.log(`catalogo (materiais) atualizado: ${catRows.length} itens`);
+  } catch (e) { console.warn("aviso: falha ao gravar materiais:", e.message); }
+
   const est = await cigamGet(hash, "/suprimentos/es/Estoque/Buscar");
   const porItemFilial = new Map(); // "codigo|filial" -> saldo
   for (const x of est) {
