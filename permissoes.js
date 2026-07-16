@@ -20,6 +20,9 @@
   const ALL_TABS = ["estoque", "vendas", "mapa", "pedidos", "criar"];
   const LABELS = { estoque: "\u{1F4E6} Estoque", vendas: "\u{1F4C8} Vendas", mapa: "\u{1F5FA}\u{FE0F} Mapa", pedidos: "\u{1F4CB} Pedidos", criar: "\u{1F6D2} Criar pedido" };
   const VALUE_FREE = ["estoque"];               // abas sem nenhum valor/faturamento
+  // linhas/grupos de produto (mesmas chaves do dropdown #filLinha do painel)
+  const LINHA_KEYS = ["pq", "salg", "pao", "omg"];
+  const LINHAS_LABEL = { pq: "Pão de queijo & biscoito", salg: "Salgados", pao: "Francês & massas doces", omg: "OMG (requeijão)" };
   const norm = (u) => String(u || "").trim().toUpperCase();
   const SB = () => (typeof sb !== "undefined" ? sb : (window.sb || null));
 
@@ -54,18 +57,23 @@
     try {
       const c = SB();
       if (c) {
-        const { data } = await c.from("permissoes").select("usuario,abas,ver_valores,admin").in("usuario", [u, "*"]);
+        const { data } = await c.from("permissoes").select("usuario,abas,ver_valores,admin,linhas").in("usuario", [u, "*"]);
         const arr = data || [];
         row = arr.find((r) => norm(r.usuario) === u) || arr.find((r) => r.usuario === "*") || null;
       }
     } catch (e) { console.warn("permissoes: fetch falhou, liberando (fail-open p/ não travar)", e); }
     // fail-open: se não achou nada (ou erro), NÃO trava o usuário
-    if (!row) row = { usuario: u, abas: ALL_TABS.slice(), ver_valores: true, admin: false };
+    if (!row) row = { usuario: u, abas: ALL_TABS.slice(), ver_valores: true, admin: false, linhas: null };
     let abas = row.abas;
     if (typeof abas === "string") { try { abas = JSON.parse(abas); } catch (_) { abas = abas.replace(/[{}\[\]"]/g, "").split(","); } }
     abas = Array.isArray(abas) ? abas.map((x) => String(x).trim()).filter(Boolean) : ALL_TABS.slice();
     if (abas.includes("*")) abas = ALL_TABS.slice();
-    return { usuario: u, abas, ver_valores: row.ver_valores !== false, admin: !!row.admin };
+    // linhas de produto: null/vazio/'*' => todas as linhas
+    let linhas = row.linhas;
+    if (typeof linhas === "string") { try { linhas = JSON.parse(linhas); } catch (_) { linhas = linhas.replace(/[{}\[\]"]/g, "").split(","); } }
+    linhas = Array.isArray(linhas) ? linhas.map((x) => String(x).trim()).filter(Boolean) : null;
+    if (linhas && (linhas.includes("*") || !linhas.length)) linhas = null;
+    return { usuario: u, abas, ver_valores: row.ver_valores !== false, admin: !!row.admin, linhas };
   }
 
   function abasEfetivas(p) {
@@ -97,6 +105,29 @@
     };
   }
 
+  // restringe as LINHAS/grupos de produto visíveis (envolve o visiveis() do painel)
+  function aplicarLinhas(allowed) {
+    window.__permLinhas = (allowed && allowed.length && !allowed.includes("*")) ? allowed : null;
+    if (!window.__visiveisWrapped && typeof visiveis === "function") {
+      const orig = visiveis;
+      window.__visiveisWrapped = true;
+      globalThis.visiveis = function () {
+        let arr = orig.apply(this, arguments);
+        const al = window.__permLinhas;
+        if (al && typeof linhaDe === "function") arr = arr.filter((it) => al.includes(linhaDe(it.codigo)));
+        return arr;
+      };
+    }
+    // dropdown de linha: esconde as não permitidas e reseta se a atual não valer
+    const sel = document.getElementById("filLinha");
+    if (sel) {
+      const al = window.__permLinhas;
+      [...sel.options].forEach((o) => { o.style.display = (!al || !o.value || al.includes(o.value)) ? "" : "none"; });
+      if (al && typeof STATE !== "undefined" && STATE.linha && !al.includes(STATE.linha)) { STATE.linha = ""; sel.value = ""; }
+    }
+    try { if (typeof render === "function") render(); } catch (_) {}
+  }
+
   // ---------------------- UI de administração (só admin) ----------------------
   function botaoAdmin(mostrar) {
     let b = document.getElementById("btnAcessos");
@@ -122,6 +153,7 @@
       '<div><b>Novo / editar</b></div>' +
       '<div style="margin:8px 0"><label>Usuário (login CIGAM) <input type="text" id="pfUser" placeholder="EX: JOAO.PROD ou *"></label></div>' +
       '<div id="pfAbas" style="margin:6px 0"></div>' +
+      '<div id="pfLinhas" style="margin:6px 0"></div>' +
       '<div style="margin:6px 0"><label><input type="checkbox" id="pfValores"> Ver valores / faturamento (R$)</label>' +
       '<label><input type="checkbox" id="pfAdmin"> Admin (gerencia acessos)</label></div>' +
       '<div style="margin-top:10px">' +
@@ -135,6 +167,9 @@
     const wrap = ov.querySelector("#pfAbas");
     wrap.innerHTML = "<span class='muted'>Abas: </span>" + ALL_TABS.map((t) =>
       `<label><input type="checkbox" class="pfAba" value="${t}"> ${LABELS[t]}</label>`).join("");
+    const wrapL = ov.querySelector("#pfLinhas");
+    wrapL.innerHTML = "<span class='muted'>Linhas/grupos (nenhuma marcada = todas): </span>" + LINHA_KEYS.map((t) =>
+      `<label><input type="checkbox" class="pfLinha" value="${t}"> ${LINHAS_LABEL[t]}</label>`).join("");
     ov.addEventListener("click", (e) => { if (e.target === ov) fechar(); });
     ov.querySelector("#pfFechar").addEventListener("click", fechar);
     ov.querySelector("#pfLimpar").addEventListener("click", () => preencherForm(null));
@@ -149,6 +184,10 @@
     abas = Array.isArray(abas) ? abas.map((x) => String(x).trim()) : [];
     if (abas.includes("*")) abas = ALL_TABS.slice();
     document.querySelectorAll(".pfAba").forEach((c) => { c.checked = abas.includes(c.value); });
+    let linhas = row ? row.linhas : [];
+    if (typeof linhas === "string") { try { linhas = JSON.parse(linhas); } catch (_) { linhas = linhas.replace(/[{}\[\]"]/g, "").split(","); } }
+    linhas = Array.isArray(linhas) ? linhas.map((x) => String(x).trim()) : [];
+    document.querySelectorAll(".pfLinha").forEach((c) => { c.checked = linhas.includes(c.value); });
     g("pfValores").checked = row ? row.ver_valores !== false : false;
     g("pfAdmin").checked = row ? !!row.admin : false;
     g("permMsg").textContent = "";
@@ -161,12 +200,15 @@
       const { data } = await SB().from("permissoes").select("*").order("usuario");
       const rows = data || [];
       el.innerHTML =
-        "<table><thead><tr><th>Usuário</th><th>Abas</th><th>Valores</th><th>Admin</th><th></th></tr></thead><tbody>" +
+        "<table><thead><tr><th>Usuário</th><th>Abas</th><th>Linhas</th><th>Valores</th><th>Admin</th><th></th></tr></thead><tbody>" +
         rows.map((r, i) => {
           let abas = r.abas; if (typeof abas === "string") { try { abas = JSON.parse(abas); } catch (_) { abas = [String(abas)]; } }
           abas = Array.isArray(abas) ? abas : [];
           const chips = (abas.includes("*") ? ["tudo"] : abas).map((a) => `<span>${LABELS[a] || a}</span>`).join("");
-          return `<tr><td><b>${r.usuario}</b></td><td class="chips">${chips}</td>` +
+          let lin = r.linhas; if (typeof lin === "string") { try { lin = JSON.parse(lin); } catch (_) { lin = lin ? [String(lin)] : []; } }
+          lin = Array.isArray(lin) ? lin.filter(Boolean) : [];
+          const chipsL = (!lin.length || lin.includes("*")) ? "<span>todas</span>" : lin.map((a) => `<span>${LINHAS_LABEL[a] || a}</span>`).join("");
+          return `<tr><td><b>${r.usuario}</b></td><td class="chips">${chips}</td><td class="chips">${chipsL}</td>` +
             `<td>${r.ver_valores !== false ? "sim" : "não"}</td><td>${r.admin ? "sim" : "—"}</td>` +
             `<td><button class="permbtn" data-edit="${i}">editar</button> ` +
             `<button class="permbtn danger" data-del="${r.usuario}">excluir</button></td></tr>`;
@@ -186,12 +228,13 @@
     const usuario = norm(document.getElementById("pfUser").value);
     if (!usuario) { msg.textContent = "Informe o usuário."; return; }
     const abas = [...document.querySelectorAll(".pfAba:checked")].map((c) => c.value);
+    const linhas = [...document.querySelectorAll(".pfLinha:checked")].map((c) => c.value);
     const ver_valores = document.getElementById("pfValores").checked;
     const admin = document.getElementById("pfAdmin").checked;
     if (await precisaEquipe()) { msg.innerHTML = "Pra salvar você precisa entrar com <b>Equipe: entrar</b> (canto superior). Faça isso e tente de novo."; return; }
     msg.textContent = "salvando…";
     try {
-      const { error } = await SB().from("permissoes").upsert({ usuario, abas, ver_valores, admin }, { onConflict: "usuario" });
+      const { error } = await SB().from("permissoes").upsert({ usuario, abas, ver_valores, admin, linhas }, { onConflict: "usuario" });
       if (error) throw error;
       msg.textContent = "salvo ✔"; preencherForm(null); carregarLista();
     } catch (e) { msg.textContent = "erro: " + (e.message || e); }
@@ -218,7 +261,8 @@
       gateTabs(allowed);
       document.body.classList.toggle("sem-valores", !p.ver_valores);
       botaoAdmin(p.admin);
-      console.info("[permissoes]", p.usuario, "abas:", allowed.join(","), "valores:", p.ver_valores, "admin:", p.admin);
+      aplicarLinhas(p.linhas);
+      console.info("[permissoes]", p.usuario, "abas:", allowed.join(","), "valores:", p.ver_valores, "admin:", p.admin, "linhas:", p.linhas || "todas");
     } catch (e) { console.warn("aplicarPermissoes erro (fail-open):", e); }
   };
 
