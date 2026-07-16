@@ -40,7 +40,9 @@
       CH.rodando = false;
       if (!j || !j.ok) { st.innerHTML = "\u274C " + escapeHtml((j && j.erro) || "nao consegui interpretar"); return; }
       var add = 0;
+      var duvT = {}; (j.duvidas || []).forEach(function (d) { duvT[String(d.trecho)] = 1; });
       (j.itens || []).forEach(function (it) {
+        if (duvT[String(it.trecho)]) return; // ambiguo: vai como duvida, nao adiciona palpite
         var p = acha(it.codigo); if (!p) return;
         CH.itens.push({ cod: p.codigo, desc: p.descricao, um: it.unidade || p.um, qtd: it.quantidade });
         add++;
