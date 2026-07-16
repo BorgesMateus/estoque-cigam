@@ -1372,6 +1372,7 @@ async function doLogin(){
     sessionStorage.setItem(SS_TOKEN, hash);
     $('#pwd').value = ""; $('#loginErr').textContent = "";
     showApp();
+    try{ sessionStorage.setItem('cigam_user', usr); if(window.aplicarPermissoes) await window.aplicarPermissoes(usr); }catch(_e){}
     await atualizar();
   }catch(e){
     $('#loginErr').textContent = /Failed to fetch|NetworkError|Load failed/i.test(String(e.message))
@@ -1469,5 +1470,6 @@ dbInit().finally(()=>{
   if(token()){ showApp(); atualizar(); } else { showLogin(); }
 });
 </script>
+<script src="permissoes.js?v=1"></script>
 </body>
 </html>
