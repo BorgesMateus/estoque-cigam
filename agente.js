@@ -90,6 +90,7 @@
     try {
       var rows = await rest("vendas?cliente=eq." + encodeURIComponent(codigo) + "&select=data,pedido,codigo,quantidade,total&order=data.desc&limit=800");
       if (Array.isArray(rows) && rows.length) {
+        var _seen = {}; rows = rows.filter(function (x) { var k = x.pedido + "|" + x.codigo + "|" + x.quantidade + "|" + x.total; if (_seen[k]) return false; _seen[k] = 1; return true; }); // remove linhas repetidas (vendas duplica seq)
         var td = rows[0].data, tp = rows[0].pedido, a1 = {};
         rows.forEach(function (x) { if (x.data === td && x.pedido === tp) a1[x.codigo] = (a1[x.codigo] || 0) + (+x.quantidade || 0); });
         out.ultimo = { data: td, itens: Object.keys(a1).map(function (c) { return { desc: acha(c) ? acha(c).descricao : c, qtd: Math.round(a1[c]) }; }) };
