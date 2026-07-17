@@ -64,7 +64,12 @@ function extrairJSON(txt: string): any {
   let s = txt.trim().replace(/^```(json)?/i, "").replace(/```$/,"").trim();
   const i = s.indexOf("{"), j = s.lastIndexOf("}");
   if (i >= 0 && j > i) s = s.slice(i, j + 1);
-  return JSON.parse(s);
+  try {
+    return JSON.parse(s);
+  } catch (_) {
+    // JSON invalido: quase sempre a resposta foi cortada num pedido gigante.
+    throw new Error("o pedido e grande demais e a resposta foi cortada. Manda em 2 partes (uns 30 itens por vez) que eu processo.");
+  }
 }
 
 async function chamarOpenAI(key: string, model: string, user: string): Promise<string> {
@@ -87,7 +92,7 @@ async function chamarAnthropic(key: string, model: string, user: string): Promis
     method: "POST",
     headers: { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
-      model, max_tokens: 1500, temperature: 0,
+      model, max_tokens: 8192, temperature: 0,
       system: SYS,
       messages: [{ role: "user", content: user + "\n\nResponda apenas com o JSON." }],
     }),
