@@ -1,0 +1,12 @@
+project_id = "pyblkmxoczxqpzvbnlca"
+
+# Estas funcoes sao chamadas pelo painel/bot/Telegram com a chave publica (sem JWT legado),
+# entao a verificacao de JWT fica desligada (mesma config que ja usamos no dashboard).
+[functions.interpretar-pedido]
+verify_jwt = false
+
+[functions.checar-disponibilidade]
+verify_jwt = false
+
+[functions.telegram-webhook]
+verify_jwt = false
