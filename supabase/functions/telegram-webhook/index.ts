@@ -189,6 +189,9 @@ async function processarPedido(chatId, texto, st) {
 async function confirmar(chatId, st) {
   const dados = st.dados || {}; const cli = dados.cliente; const itens = dados.itens || [];
   if (!cli || !itens.length) { await send(chatId, "Faltou cliente ou itens. Manda /novo pra recomecar."); return; }
+  // TRAVA anti-duplicacao: se esse pedido ja esta sendo criado, ignora toque/reenvio repetido.
+  if (dados.criando) { await send(chatId, "\u23F3 Ja estou criando esse pedido, so um instante\u2026"); return; }
+  dados.criando = true; await setState(chatId, "criando", dados);
   // 1) BLOQUEIO: confere o estoque AO VIVO no CIGAM (nao vende o que nao tem)
   await send(chatId, "\u23F3 Conferindo o estoque no CIGAM\u2026");
   const chk = await checarDisp(itens);
@@ -200,6 +203,7 @@ async function confirmar(chatId, st) {
       faltando.forEach((i) => { const r = mapa[String(i.cod)]; msg += "\u2022 " + i.desc + " \u2014 pediu <b>" + i.qtd + "</b>, tem <b>" + (r ? r.disponivel : 0) + "</b>\n"; });
       msg += "\nO que fazemos?";
       dados.semEstoque = faltando.map((i) => i.cod);
+      dados.criando = false; // libera a trava: o usuario precisa decidir (tirar sem estoque / cancelar)
       await setState(chatId, "itens", dados);
       await send(chatId, msg, [[{ text: "\u2702\uFE0F Tirar os sem estoque e criar o resto", callback_data: "rmsem" }], [{ text: "\u274C Cancelar", callback_data: "no" }]]);
       return;
@@ -211,7 +215,7 @@ async function confirmar(chatId, st) {
   await send(chatId, "\u23F3 Criando o pedido no CIGAM\u2026");
   const r = await criar(cli.codigo, itens);
   if (r && r.ok) { await clearState(chatId); await send(chatId, "\u{1F389} <b>Pedido " + r.cigamOrderId + " criado no CIGAM!</b>\nCliente " + cli.nome + " \u00B7 " + itens.length + " item(ns). Manda /novo pra fazer outro."); }
-  else { await send(chatId, "\u274C Nao consegui criar: " + ((r && r.erro) || "erro") + "\nToca \u2705 pra tentar de novo, ou /cancelar."); }
+  else { dados.criando = false; await setState(chatId, "itens", dados); await send(chatId, "\u274C Nao consegui criar: " + ((r && r.erro) || "erro") + "\nToca \u2705 pra tentar de novo, ou /cancelar."); }
 }
 
 function autorizado(uid) { return ALLOWED.indexOf(String(uid)) >= 0; }
@@ -286,6 +290,10 @@ Deno.serve(async (req) => {
   if (!TG_TOKEN) return new Response("missing TELEGRAM_BOT_TOKEN", { status: 200 });
   let update = null;
   try { update = await req.json(); } catch (_) { return new Response("ok"); }
-  try { await handle(update); } catch (e) { console.error("handle:", String((e && e.message) || e)); }
+  // Responde JA pro Telegram (200) e processa o pedido em segundo plano com waitUntil.
+  // Criar o pedido no CIGAM leva ~20-30s; se a gente segurasse a resposta, o Telegram
+  // dava timeout, REENVIAVA a mensagem (duplicando o pedido) e a confirmacao nunca voltava.
+  const bg = handle(update).catch((e) => console.error("handle:", String((e && e.message) || e)));
+  try { (globalThis as any).EdgeRuntime?.waitUntil?.(bg); } catch (_) {}
   return new Response("ok");
 });
