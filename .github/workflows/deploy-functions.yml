@@ -1,0 +1,32 @@
+name: Deploy Edge Functions (Supabase)
+
+# Sobe as Edge Functions pro Supabase via CLI (sem depender do painel deles).
+# Roda na mao (workflow_dispatch) ou quando algo em supabase/functions/ muda.
+# Precisa do secret SUPABASE_ACCESS_TOKEN (Account -> Access Tokens no Supabase).
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "supabase/functions/**"
+      - "supabase/config.toml"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: pyblkmxoczxqpzvbnlca
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Deploy funcoes
+        run: |
+          set -e
+          for fn in interpretar-pedido checar-disponibilidade telegram-webhook; do
+            echo "== deploy $fn =="
+            supabase functions deploy "$fn" --project-ref "$PROJECT_REF"
+          done
