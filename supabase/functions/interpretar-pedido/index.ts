@@ -237,6 +237,12 @@ Deno.serve(async (req) => {
     });
     const _vd: Record<string, number> = {};
     const duvidasU = duvidas.filter((d: any) => { const kk = normU(String(d.trecho)); if (_vd[kk]) return false; _vd[kk] = 1; return true; });
+    // re-ranqueia TODAS as dúvidas (inclusive as que vieram direto da IA) pelo histórico do cliente
+    duvidasU.forEach((d: any) => {
+      if (Array.isArray(d.opcoes)) d.opcoes = d.opcoes
+        .map((o: any) => ({ codigo: String(o.codigo), descricao: String(o.descricao), hist: (o.hist != null ? o.hist : rankHist(o.codigo)) }))
+        .sort((a: any, b: any) => (b.hist || 0) - (a.hist || 0));
+    });
 
     return new Response(JSON.stringify({
       ok: true, provider, modelo: model,
