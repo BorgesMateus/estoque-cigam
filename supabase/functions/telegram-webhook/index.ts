@@ -92,11 +92,20 @@ async function contexto(codigo) {
 }
 
 // ---------------- Funcoes internas (reusa o que ja existe) ----------------
-async function interpretar(mensagem, cat) {
+async function interpretar(mensagem, cat, clienteCodigo) {
   try {
-    const r = await fetch(SB_URL + "/functions/v1/interpretar-pedido", { method: "POST", headers: H, body: JSON.stringify({ mensagem: mensagem, catalogo: cat }) });
+    const r = await fetch(SB_URL + "/functions/v1/interpretar-pedido", { method: "POST", headers: H, body: JSON.stringify({ mensagem: mensagem, catalogo: cat, clienteCodigo: clienteCodigo || "" }) });
     return await r.json();
   } catch (_) { return null; }
+}
+// aprende: salva o apelido que o vendedor escolheu numa duvida (vocabulario do time todo)
+async function salvarVocab(apelido, codigo) {
+  try {
+    const a = String(apelido || "").trim(); const c = String(codigo || "").trim();
+    if (!a || !c) return;
+    await fetch(SB_URL + "/rest/v1/agente_vocab?apelido=eq." + encodeURIComponent(a), { method: "DELETE", headers: H });
+    await fetch(SB_URL + "/rest/v1/agente_vocab", { method: "POST", headers: Object.assign({}, H, { Prefer: "return=minimal" }), body: JSON.stringify({ apelido: a, codigo: c }) });
+  } catch (_) { /* ignore */ }
 }
 async function criar(clienteCode, itens) {
   try {
@@ -120,7 +129,7 @@ async function checarDisp(itens) {
 
 // ---------------- Fluxo ----------------
 function curto(d) { return String(d || "").split(/\s+/).slice(0, 3).join(" "); }
-function resumoItens(itens) { return itens.map((i, n) => (n + 1) + ". " + i.qtd + " " + i.um + " \u2014 " + i.desc).join("\n"); }
+function resumoItens(itens) { return itens.map((i, n) => (n + 1) + ". " + i.qtd + " " + i.um + " \u2014 " + i.desc + (i.ajustado && i.trecho ? "\n    (voce escreveu: " + i.trecho + ")" : "")).join("\n"); }
 const KB_CONFIRMAR = [[{ text: "\u2705 Confirmar e criar", callback_data: "ok" }], [{ text: "\u274C Cancelar", callback_data: "no" }]];
 
 async function mostrarContexto(chatId, codigo) {
@@ -163,18 +172,20 @@ async function etapaCliente(chatId, termo) {
 async function processarPedido(chatId, texto, st) {
   const cat = await catalogo();
   if (!cat.length) { await send(chatId, "Catalogo vazio no banco. Avisa o Mateus pra atualizar os materiais."); return; }
-  const j = await interpretar(texto, cat);
+  const cliCod = (st.dados && st.dados.cliente && st.dados.cliente.codigo) || "";
+  const j = await interpretar(texto, cat, cliCod);
   if (!j || !j.ok) { await send(chatId, "\u274C " + ((j && j.erro) || "nao consegui interpretar")); return; }
   const dados = st.dados || {}; dados.itens = dados.itens || [];
   const duvT = {}; (j.duvidas || []).forEach((d) => { duvT[String(d.trecho)] = 1; });
   let add = 0;
-  (j.itens || []).forEach((it) => { if (duvT[String(it.trecho)]) return; const p = acha(cat, it.codigo); if (!p) return; dados.itens.push({ cod: p.c, desc: p.d, um: it.unidade || p.u, qtd: it.quantidade }); add++; });
+  (j.itens || []).forEach((it) => { if (duvT[String(it.trecho)]) return; const p = acha(cat, it.codigo); if (!p) return; dados.itens.push({ cod: p.c, desc: p.d, um: it.unidade || p.u, qtd: it.quantidade, ajustado: !!it.ajustado, trecho: it.trecho || "" }); add++; });
+  const duvidas = j.duvidas || [];
+  dados.duvPend = duvidas.map((d) => d.trecho || "");
   await setState(chatId, "itens", dados);
   if ((j.naoEncontrados || []).length) await send(chatId, "\u26A0 Nao achei no catalogo: " + j.naoEncontrados.join(", ") + " (tenta outro nome)");
-  const duvidas = j.duvidas || [];
   for (let di = 0; di < duvidas.length; di++) {
-    const d = duvidas[di]; const qtd = (String(d.trecho).match(/[\d.,]+/) || ["1"])[0].replace(",", ".");
-    const kb = (d.opcoes || []).map((o) => [{ text: String(o.descricao).slice(0, 60), callback_data: "d:" + o.codigo + ":" + qtd }]);
+    const d = duvidas[di]; const qtd = (d.quantidade != null ? d.quantidade : ((String(d.trecho).match(/[\d.,]+/) || ["1"])[0].replace(",", ".")));
+    const kb = (d.opcoes || []).map((o) => [{ text: String(o.descricao).slice(0, 60), callback_data: "d:" + o.codigo + ":" + qtd + ":" + di }]);
     if (kb.length) await send(chatId, "\u{1F914} Qual e o certo? (\"" + d.trecho + "\")", kb);
   }
   const st2 = await getState(chatId);
@@ -244,11 +255,15 @@ async function onCallback(chatId, data) {
   }
   if (data.indexOf("d:") === 0) {
     const parts = data.split(":"); const cod = parts[1]; const qtd = parseFloat(parts[2]) || 1;
+    const idx = parts[3] != null ? parseInt(parts[3], 10) : -1;
     const cat = await catalogo(); const p = acha(cat, cod);
     if (!p) { await send(chatId, "produto nao encontrado no catalogo."); return; }
-    const dados = st.dados || {}; dados.itens = dados.itens || []; dados.itens.push({ cod: p.c, desc: p.d, um: p.u, qtd: qtd });
+    const dados = st.dados || {}; dados.itens = dados.itens || [];
+    const trecho = (dados.duvPend && idx >= 0) ? (dados.duvPend[idx] || "") : "";
+    if (trecho) await salvarVocab(trecho, cod); // aprende pro time todo
+    dados.itens.push({ cod: p.c, desc: p.d, um: p.u, qtd: qtd });
     await setState(chatId, "itens", dados);
-    await send(chatId, "+ " + qtd + " " + p.u + " \u2014 " + p.d + " \u2714");
+    await send(chatId, "+ " + qtd + " " + p.u + " \u2014 " + p.d + " \u2714" + (trecho ? "  (aprendi: \"" + trecho + "\")" : ""));
     await mostrarResumoConfirmar(chatId, await getState(chatId));
     return;
   }
