@@ -1,13 +1,15 @@
 // Supabase Edge Function: interpretar-pedido
-// C\u00C9REBRO do agente. Recebe uma frase natural ("manda 10 ferradura e 5 coxinha pro cliente X")
-// + o cat\u00E1logo de produtos, e devolve os itens estruturados (c\u00F3digo CIGAM, quantidade, unidade).
-// Usa LLM. O vocabul\u00E1rio de apelidos (ferradura=meia lua) sai da tabela agente_vocab do Supabase.
+// CÉREBRO do agente. Recebe uma frase natural ("manda 10 ferradura e 5 coxinha pro cliente X")
+// + o catálogo de produtos, e devolve os itens estruturados (código CIGAM, quantidade, unidade).
+// Motor híbrido: a IA estrutura a frase em itens; um casador DETERMINÍSTICO forte decide o código
+// (unifica kg/k, gr/g, pact/pc/pct, unid/un e espaços), o vocabulário do time (agente_vocab) tem
+// prioridade, e as dúvidas vêm ordenadas pelo histórico do cliente.
 //
-// Secrets (Supabase \u2192 Edge Functions \u2192 Manage secrets):
-//   OPENAI_API_KEY   (recomendado \u2014 usa gpt-4o-mini, barat\u00EDssimo)   OU
+// Secrets (Supabase → Edge Functions → Manage secrets):
+//   OPENAI_API_KEY   (recomendado — usa gpt-4o-mini, baratíssimo)   OU
 //   ANTHROPIC_API_KEY (usa claude-haiku)
-//   LLM_MODEL        (opcional, sobrescreve o modelo padr\u00E3o)
-// SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY s\u00E3o injetados automaticamente (pra ler o vocabul\u00E1rio).
+//   LLM_MODEL        (opcional, sobrescreve o modelo padrão)
+// SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY são injetados automaticamente (vocab + histórico).
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -16,19 +18,20 @@ const CORS = {
 };
 const SB_URL = Deno.env.get("SUPABASE_URL") || "";
 const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_ANON_KEY") || "";
+const SB_H = { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY };
 
 const SYS = [
-  "Voc\u00EA \u00E9 o assistente de pedidos da Gostinho Mineiro, uma distribuidora de p\u00E3o de queijo, biscoitos, salgados de festa e p\u00E3es.",
-  "Sua tarefa: ler um pedido escrito em portugu\u00EAs informal (com g\u00EDrias e apelidos regionais) e convert\u00EA-lo em itens estruturados.",
-  "Regras r\u00EDgidas:",
-  "1. Use SOMENTE c\u00F3digos que est\u00E3o no CAT\u00C1LOGO fornecido. Nunca invente c\u00F3digo.",
-  "2. Use o VOCABUL\u00C1RIO de apelidos para resolver g\u00EDrias (ex.: 'ferradura' pode ser um apelido de um biscoito meia lua).",
-  "3. Extraia a quantidade (n\u00FAmero) e a unidade. Se a unidade n\u00E3o for dita, use a unidade padr\u00E3o (UM) do produto do cat\u00E1logo.",
-  "4. Uma mensagem pode ter V\u00C1RIOS itens. Separe cada um.",
-  "5. Se um item casar com mais de um produto e voc\u00EA n\u00E3o tiver certeza, N\u00C3O chute: coloque em 'duvidas' com as op\u00E7\u00F5es (c\u00F3digo + descri\u00E7\u00E3o).",
-  "6. Se n\u00E3o achar o produto no cat\u00E1logo, coloque o texto em 'naoEncontrados'.",
-  "7. 'confianca' \u00E9 de 0 a 1 (1 = certeza total).",
-  "Responda SOMENTE com um JSON v\u00E1lido, sem texto antes ou depois, no formato exato:",
+  "Você é o assistente de pedidos da Gostinho Mineiro, uma distribuidora de pão de queijo, biscoitos, salgados de festa e pães.",
+  "Sua tarefa: ler um pedido escrito em português informal (com gírias e apelidos regionais) e convertê-lo em itens estruturados.",
+  "Regras rígidas:",
+  "1. Use SOMENTE códigos que estão no CATÁLOGO fornecido. Nunca invente código.",
+  "2. Use o VOCABULÁRIO de apelidos para resolver gírias (ex.: 'ferradura' pode ser um apelido de um biscoito meia lua).",
+  "3. Extraia a quantidade (número) e a unidade. Se a unidade não for dita, use a unidade padrão (UM) do produto do catálogo.",
+  "4. Uma mensagem pode ter VÁRIOS itens. Separe cada um. No campo 'trecho' devolva SO a descrição do item (sem a quantidade).",
+  "5. Se um item casar com mais de um produto e você não tiver certeza, NÃO chute: coloque em 'duvidas' com as opções (código + descrição).",
+  "6. Se não achar o produto no catálogo, coloque o texto em 'naoEncontrados'.",
+  "7. 'confianca' é de 0 a 1 (1 = certeza total).",
+  "Responda SOMENTE com um JSON válido, sem texto antes ou depois, no formato exato:",
   '{"itens":[{"codigo":"","descricao":"","quantidade":0,"unidade":"","confianca":0,"trecho":""}],"duvidas":[{"trecho":"","opcoes":[{"codigo":"","descricao":""}]}],"naoEncontrados":[""],"resumo":""}',
 ].join("\n");
 
@@ -36,10 +39,10 @@ function montarUser(mensagem: string, catalogo: any[], vocab: any[]): string {
   const cat = (catalogo || []).map((p) => `${p.c || p.codigo} | ${p.d || p.descricao} | ${p.u || p.um || ""}`).join("\n");
   const voc = (vocab || []).map((v) => `${v.apelido} => ${v.codigo}`).join("\n") || "(vazio)";
   return [
-    "CAT\u00C1LOGO (codigo | descricao | UM):",
+    "CATÁLOGO (codigo | descricao | UM):",
     cat,
     "",
-    "VOCABUL\u00C1RIO DE APELIDOS (apelido => codigo):",
+    "VOCABULÁRIO DE APELIDOS (apelido => codigo):",
     voc,
     "",
     "PEDIDO DO CLIENTE (transforme em JSON conforme as regras):",
@@ -50,24 +53,32 @@ function montarUser(mensagem: string, catalogo: any[], vocab: any[]): string {
 async function lerVocab(): Promise<any[]> {
   if (!SB_URL || !SB_KEY) return [];
   try {
-    const r = await fetch(`${SB_URL}/rest/v1/agente_vocab?select=apelido,codigo`, {
-      headers: { apikey: SB_KEY, Authorization: "Bearer " + SB_KEY },
-    });
+    const r = await fetch(`${SB_URL}/rest/v1/agente_vocab?select=apelido,codigo`, { headers: SB_H });
     const rows = await r.json().catch(() => []);
     return Array.isArray(rows) ? rows : [];
   } catch { return []; }
 }
 
+// histórico de compra do cliente: codigo -> quantidade total (pra ordenar dúvidas)
+async function lerHistorico(clienteCodigo: string): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  if (!clienteCodigo || !SB_URL || !SB_KEY) return out;
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/vendas?cliente=eq.${encodeURIComponent(clienteCodigo)}&select=codigo,quantidade&limit=4000`, { headers: SB_H });
+    const rows = await r.json().catch(() => []);
+    (Array.isArray(rows) ? rows : []).forEach((x: any) => { const c = String(x.codigo).trim(); out[c] = (out[c] || 0) + (Number(x.quantidade) || 0); });
+  } catch { /* ignore */ }
+  return out;
+}
+
 function extrairJSON(txt: string): any {
-  if (!txt) throw new Error("LLM n\u00E3o retornou conte\u00FAdo");
-  // remove cercas de c\u00F3digo e pega o primeiro bloco {...}
-  let s = txt.trim().replace(/^```(json)?/i, "").replace(/```$/,"").trim();
+  if (!txt) throw new Error("LLM não retornou conteúdo");
+  let s = txt.trim().replace(/^```(json)?/i, "").replace(/```$/, "").trim();
   const i = s.indexOf("{"), j = s.lastIndexOf("}");
   if (i >= 0 && j > i) s = s.slice(i, j + 1);
   try {
     return JSON.parse(s);
   } catch (_) {
-    // JSON invalido: quase sempre a resposta foi cortada num pedido gigante.
     throw new Error("o pedido e grande demais e a resposta foi cortada. Manda em 2 partes (uns 30 itens por vez) que eu processo.");
   }
 }
@@ -109,13 +120,15 @@ Deno.serve(async (req) => {
     const mensagem = String(body?.mensagem || "").trim();
     if (!mensagem) throw new Error("mensagem vazia");
     const catalogo = Array.isArray(body?.catalogo) ? body.catalogo : [];
-    if (!catalogo.length) throw new Error("cat\u00E1logo n\u00E3o enviado (o painel precisa mandar STATE.materiais)");
+    if (!catalogo.length) throw new Error("catálogo não enviado (o painel precisa mandar STATE.materiais)");
+    const clienteCodigo = String(body?.clienteCodigo || "").trim();
 
     const oa = Deno.env.get("OPENAI_API_KEY");
     const an = Deno.env.get("ANTHROPIC_API_KEY");
-    if (!oa && !an) throw new Error("configure OPENAI_API_KEY (ou ANTHROPIC_API_KEY) nos secrets da fun\u00E7\u00E3o");
+    if (!oa && !an) throw new Error("configure OPENAI_API_KEY (ou ANTHROPIC_API_KEY) nos secrets da função");
 
     const vocab = Array.isArray(body?.vocab) ? body.vocab : await lerVocab();
+    const histQtd = await lerHistorico(clienteCodigo);
     const user = montarUser(mensagem, catalogo, vocab);
 
     let raw = "", provider = "", model = "";
@@ -123,10 +136,13 @@ Deno.serve(async (req) => {
     else { provider = "openai"; model = Deno.env.get("LLM_MODEL") || "gpt-4o-mini"; raw = await chamarOpenAI(oa!, model, user); }
 
     const out = extrairJSON(raw);
-    // valida: s\u00F3 deixa itens com c\u00F3digo que existe no cat\u00E1logo
+
+    // ---- índices do catálogo ----
     const validos = new Set(catalogo.map((p: any) => String(p.c || p.codigo)));
     const porCodigo: Record<string, any> = {};
     catalogo.forEach((p: any) => { porCodigo[String(p.c || p.codigo)] = p; });
+
+    // itens que a IA estruturou (só os com código válido; o resto vira naoEncontrado)
     const itens = (out.itens || []).filter((it: any) => validos.has(String(it.codigo))).map((it: any) => {
       const p = porCodigo[String(it.codigo)];
       return {
@@ -138,45 +154,75 @@ Deno.serve(async (req) => {
         trecho: it.trecho || "",
       };
     });
-    // itens com c\u00F3digo inv\u00E1lido viram "duvida"/naoEncontrado
     const invalidos = (out.itens || []).filter((it: any) => !validos.has(String(it.codigo)));
     const naoEncontrados = [...(out.naoEncontrados || []), ...invalidos.map((it: any) => it.trecho || it.descricao || "")].filter(Boolean);
 
-    // TRAVA ANTI-CHUTE: se as palavras do pedido casam com V\u00C1RIOS produtos do cat\u00E1logo
-    // (ex.: "pao de queijo" -> \u00EDmpar 15g, coquetel 55g, gourmet...), N\u00C3O escolhe sozinho:
-    // vira D\u00DAVIDA com as op\u00E7\u00F5es pra pessoa clicar. S\u00F3 entra em "itens" se o casamento for \u00FAnico.
-    const norm = (s: string) => String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036F]/g, "");
+    // ---- normalização FORTE (unifica unidades/abreviações antes de casar) ----
+    const norm = (s: string) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    const normU = (s: string) => norm(s)
+      .replace(/(\d)\s*kg\b/g, "$1k").replace(/(\d)\s*gr\b/g, "$1g")
+      .replace(/(\d)\s*g\b/g, "$1g").replace(/(\d)\s*k\b/g, "$1k")
+      .replace(/\bpact\b/g, "pct").replace(/\bpc\b/g, "pct")
+      .replace(/\bunid\b/g, "un").replace(/\bund\b/g, "un").replace(/\bunidade\b/g, "un");
     const STOP: Record<string, number> = { de: 1, e: 1, com: 1, da: 1, do: 1, para: 1, pra: 1 };
-    const tokenizar = (trecho: string) => {
-      let ts = norm(trecho).split(/[^a-z0-9]+/).filter(Boolean);
-      if (ts.length && /^\d+$/.test(ts[0])) ts = ts.slice(1); // tira a quantidade (1o numero)
-      return ts.filter((t) => !STOP[t]);
-    };
-    const palavras = (desc: string) => new Set(norm(desc).split(/[^a-z0-9]+/).filter(Boolean));
+    const toks = (s: string) => normU(s).split(/[^a-z0-9]+/).filter(Boolean);
+    const tokenizar = (trecho: string) => { let ts = toks(trecho); if (ts.length && /^\d+$/.test(ts[0])) ts = ts.slice(1); return ts.filter((t) => !STOP[t]); };
+    const palavras = (desc: string) => new Set(toks(desc));
+    const catToks = catalogo.map((p: any) => ({ p, w: palavras(p.d || p.descricao) }));
     const alternativas = (trecho: string) => {
-      const ts = tokenizar(trecho);
-      if (!ts.length) return [] as any[];
-      return catalogo.filter((p: any) => { const w = palavras(p.d || p.descricao); return ts.every((t) => w.has(t)); });
+      const ts = tokenizar(trecho); if (!ts.length) return [] as any[];
+      return catToks.filter((ct) => ts.every((t) => ct.w.has(t))).map((ct) => ct.p);
     };
+
+    // ---- vocabulário do time (apelido -> codigo), casado por tokens ----
+    const vocabTok = (vocab || [])
+      .map((v: any) => ({ toks: tokenizar(String(v.apelido || "")), codigo: String(v.codigo || "").trim() }))
+      .filter((x: any) => x.toks.length && validos.has(x.codigo));
+    const acharVocab = (trecho: string) => {
+      const setT = new Set(tokenizar(trecho)); if (!setT.size) return null;
+      let best: any = null;
+      for (const v of vocabTok) if (v.toks.every((t: string) => setT.has(t))) { if (!best || v.toks.length > best.toks.length) best = v; }
+      return best ? best.codigo : null;
+    };
+
+    const rankHist = (codigo: any) => histQtd[String(codigo).trim()] || 0;
+    const fazItem = (o: any, it: any, via: string) => {
+      const desc = String(o.d || o.descricao);
+      const ajustado = tokenizar(it.trecho).some((t) => !palavras(desc).has(t)); // texto do vendedor difere do produto
+      return { codigo: String(o.c || o.codigo), descricao: desc, quantidade: it.quantidade, unidade: it.unidade || o.u || o.um || "UN", confianca: it.confianca, trecho: it.trecho, ajustado, via };
+    };
+
     const duvidas: any[] = [...(out.duvidas || [])];
     const itensFinais: any[] = [];
     itens.forEach((it: any) => {
+      // 1) VOCABULÁRIO aprendido pelo time (autoritativo)
+      const vc = acharVocab(it.trecho);
+      if (vc && porCodigo[vc]) { itensFinais.push(fazItem(porCodigo[vc], it, "vocab")); return; }
+      // 2) casamento DETERMINÍSTICO
       const alts = alternativas(it.trecho);
-      if (alts.length === 0) { itensFinais.push(it); return; } // sem casamento textual -> confia no LLM (apelido/vocab)
-      if (alts.length === 1) { // 1 casamento exato -> usa ele (corrige ate palpite errado do LLM)
-        const o: any = alts[0];
-        itensFinais.push({ codigo: String(o.c || o.codigo), descricao: String(o.d || o.descricao), quantidade: it.quantidade, unidade: it.unidade || o.u || o.um || "UN", confianca: it.confianca, trecho: it.trecho });
+      if (alts.length === 1) { itensFinais.push(fazItem(alts[0], it, "exato")); return; }
+      if (alts.length === 0) { // sem casamento textual -> confia no palpite da IA (gíria)
+        const p = porCodigo[String(it.codigo)];
+        itensFinais.push({ ...it, ajustado: tokenizar(it.trecho).some((t) => !palavras(p ? (p.d || p.descricao) : it.descricao).has(t)), via: "ia" });
         return;
       }
-      // varios -> DUVIDA (nao chuta). Remove duvida do LLM com mesmo trecho e reconstroi com o catalogo.
-      const k = norm(String(it.trecho));
-      for (let i = duvidas.length - 1; i >= 0; i--) if (norm(String(duvidas[i].trecho)) === k) duvidas.splice(i, 1);
+      // 3) VÁRIOS casamentos -> DÚVIDA ordenada pelo histórico do cliente (depois pelo palpite da IA)
+      const k = normU(String(it.trecho));
+      for (let i = duvidas.length - 1; i >= 0; i--) if (normU(String(duvidas[i].trecho)) === k) duvidas.splice(i, 1);
       const llm = String(it.codigo);
-      const ord = alts.slice().sort((a: any, b: any) => (String(b.c || b.codigo) === llm ? 1 : 0) - (String(a.c || a.codigo) === llm ? 1 : 0));
-      duvidas.push({ trecho: it.trecho || ((it.quantidade || "") + " " + it.descricao), opcoes: ord.slice(0, 8).map((a: any) => ({ codigo: String(a.c || a.codigo), descricao: String(a.d || a.descricao) })) });
+      const ord = alts.slice().sort((a: any, b: any) => {
+        const ha = rankHist(a.c || a.codigo), hb = rankHist(b.c || b.codigo);
+        if (hb !== ha) return hb - ha;
+        return (String(b.c || b.codigo) === llm ? 1 : 0) - (String(a.c || a.codigo) === llm ? 1 : 0);
+      });
+      duvidas.push({
+        trecho: it.trecho || ((it.quantidade || "") + " " + it.descricao),
+        quantidade: it.quantidade,
+        opcoes: ord.slice(0, 8).map((a: any) => ({ codigo: String(a.c || a.codigo), descricao: String(a.d || a.descricao), hist: rankHist(a.c || a.codigo) })),
+      });
     });
     const _vd: Record<string, number> = {};
-    const duvidasU = duvidas.filter((d: any) => { const kk = norm(String(d.trecho)); if (_vd[kk]) return false; _vd[kk] = 1; return true; });
+    const duvidasU = duvidas.filter((d: any) => { const kk = normU(String(d.trecho)); if (_vd[kk]) return false; _vd[kk] = 1; return true; });
 
     return new Response(JSON.stringify({
       ok: true, provider, modelo: model,
