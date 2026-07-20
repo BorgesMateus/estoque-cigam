@@ -201,7 +201,21 @@ Deno.serve(async (req) => {
       // 2) casamento DETERMINÍSTICO
       const alts = alternativas(it.trecho);
       if (alts.length === 1) { itensFinais.push(fazItem(alts[0], it, "exato")); return; }
-      if (alts.length === 0) { // sem casamento textual -> confia no palpite da IA (gíria)
+      if (alts.length === 0) {
+        // sem casamento EXATO: tenta PARCIAL (a maioria dos tokens) -> vira DÚVIDA ordenada por histórico + sobreposição.
+        // (evita o chute ruim da IA, tipo "hot dog" virar "hamburguer")
+        const ts = tokenizar(it.trecho);
+        const min = Math.max(1, Math.ceil(ts.length / 2));
+        const parciais = catToks.map((ct: any) => ({ p: ct.p, hits: ts.filter((t) => ct.w.has(t)).length }))
+          .filter((x: any) => x.hits >= min)
+          .sort((a: any, b: any) => { const ha = rankHist(a.p.c || a.p.codigo), hb = rankHist(b.p.c || b.p.codigo); if (hb !== ha) return hb - ha; return b.hits - a.hits; });
+        if (parciais.length) {
+          const kk = normU(String(it.trecho));
+          for (let i = duvidas.length - 1; i >= 0; i--) if (normU(String(duvidas[i].trecho)) === kk) duvidas.splice(i, 1);
+          duvidas.push({ trecho: it.trecho || ((it.quantidade || "") + " " + it.descricao), quantidade: it.quantidade, opcoes: parciais.slice(0, 8).map((x: any) => ({ codigo: String(x.p.c || x.p.codigo), descricao: String(x.p.d || x.p.descricao), hist: rankHist(x.p.c || x.p.codigo) })) });
+          return;
+        }
+        // nenhuma sobreposição (gíria pura) -> confia no palpite da IA se válido
         const p = porCodigo[String(it.codigo)];
         itensFinais.push({ ...it, ajustado: tokenizar(it.trecho).some((t) => !palavras(p ? (p.d || p.descricao) : it.descricao).has(t)), via: "ia" });
         return;
