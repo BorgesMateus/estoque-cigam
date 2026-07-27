@@ -40,7 +40,7 @@ jobs:
             --data @payload.json)
           echo "== HTTP $code =="
           cat resp.json
-          echo
+          { echo "HTTP $code"; echo '```json'; cat resp.json; echo; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           if [ "$code" != "200" ] && [ "$code" != "201" ]; then
             echo "Falha ao rodar SQL"; exit 1
           fi
