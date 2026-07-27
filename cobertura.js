@@ -50,7 +50,8 @@
   function descDe(it) { return (it && it.descricao) || (it && it.codigo) || "?"; }
 
   // ---------- carregar dados do banco ----------
-  function precisaSb() { return typeof window.sb !== "undefined" && window.sb; }
+  function SB() { return (typeof sb !== "undefined" && sb) || window.sb || null; }
+  function precisaSb() { return !!SB(); }
 
   function carregarPerfil() {
     // demanda_perfil pode ter >1000 linhas -> pagina
@@ -58,7 +59,7 @@
     var maxAt = null;
     var passo = 1000;
     function pagina(off) {
-      return window.sb.from("demanda_perfil")
+      return SB().from("demanda_perfil")
         .select("codigo,dow,media,atualizado_em")
         .range(off, off + passo - 1)
         .then(function (r) {
@@ -76,7 +77,7 @@
   }
 
   function carregarLeads() {
-    return window.sb.from("cobertura_lead").select("chave,tipo,lead_dias").then(function (r) {
+    return SB().from("cobertura_lead").select("chave,tipo,lead_dias").then(function (r) {
       var m = { global: LEAD_PADRAO, grupo: {}, produto: {} };
       (r.data || []).forEach(function (x) {
         var v = Number(x.lead_dias) || LEAD_PADRAO;
@@ -89,7 +90,7 @@
   }
 
   function carregarCarreg() {
-    return window.sb.from("carregamentos").select("id,data,descricao,escopo,grupos,codigos,fator")
+    return SB().from("carregamentos").select("id,data,descricao,escopo,grupos,codigos,fator")
       .order("data", { ascending: true }).then(function (r) {
         DB.carreg = (r.data || []).map(function (x) {
           return {
