@@ -43,8 +43,8 @@
   function diffDias(a, b) { return Math.round((a.getTime() - b.getTime()) / 86400000); }
 
   function dispDe(it) {
-    if (typeof window.disponivelDe === "function") return Number(window.disponivelDe(it)) || 0;
-    if (typeof window.saldoDe === "function") return Number(window.saldoDe(it)) || 0;
+    try { if (typeof disponivelDe === "function") { var v = Number(disponivelDe(it)); if (isFinite(v)) return v; } } catch (e) {}
+    try { if (typeof saldoDe === "function") { var s = Number(saldoDe(it)); if (isFinite(s)) return s; } } catch (e) {}
     return Number(it && (it.disponivel != null ? it.disponivel : it.saldo)) || 0;
   }
   function descDe(it) { return (it && it.descricao) || (it && it.codigo) || "?"; }
