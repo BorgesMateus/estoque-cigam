@@ -1,0 +1,46 @@
+name: Rodar SQL (Supabase)
+
+# Roda SQL no banco via Management API do Supabase (usa o mesmo SUPABASE_ACCESS_TOKEN do deploy).
+# Serve pra criar tabelas/funcoes sem depender do dashboard. Rodar na mao (workflow_dispatch).
+# Passa um arquivo .sql do repo em "file", ou cola SQL direto em "sql".
+
+on:
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "caminho do arquivo .sql no repo"
+        required: false
+        default: "supabase/sql/cobertura.sql"
+      sql:
+        description: "SQL inline (se preenchido, ignora o arquivo)"
+        required: false
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      REF: pyblkmxoczxqpzvbnlca
+    steps:
+      - uses: actions/checkout@v4
+      - name: Executar SQL
+        run: |
+          set -e
+          if [ -n "${{ github.event.inputs.sql }}" ]; then
+            SQL="${{ github.event.inputs.sql }}"
+          else
+            SQL="$(cat "${{ github.event.inputs.file }}")"
+          fi
+          jq -n --arg q "$SQL" '{query:$q}' > payload.json
+          code=$(curl -s -o resp.json -w "%{http_code}" -X POST \
+            "https://api.supabase.com/v1/projects/$REF/database/query" \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Content-Type: application/json" \
+            --data @payload.json)
+          echo "== HTTP $code =="
+          cat resp.json
+          echo
+          if [ "$code" != "200" ] && [ "$code" != "201" ]; then
+            echo "Falha ao rodar SQL"; exit 1
+          fi
