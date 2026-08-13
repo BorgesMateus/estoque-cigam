@@ -1,0 +1,26 @@
+name: wa-relatorio
+
+on:
+  schedule:
+    - cron: '15 10 * * *'   # 07:15 BRT, depois do snapshot das 07:00
+  workflow_dispatch: {}
+
+jobs:
+  enviar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Instalar dependencias
+        run: npm i --no-save @whiskeysockets/baileys qrcode-terminal pino playwright
+      - name: Instalar Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Gerar PDF e enviar no WhatsApp
+        run: node scripts/wa.mjs enviar
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          WA_GRUPO: ${{ vars.WA_GRUPO }}
