@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parear WhatsApp — Estoque CIGAM Pro</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  body{font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:#f4f5f8;color:#1c1c22;display:flex;flex-direction:column;align-items:center;padding:24px;margin:0;min-height:100vh}
+  h1{font-size:20px;margin:8px 0 2px}
+  .sub{color:#61636e;font-size:13px;margin-bottom:18px;text-align:center;max-width:340px}
+  #box{background:#fff;border:1px solid #e4e5ea;border-radius:16px;padding:24px;box-shadow:0 4px 16px rgba(0,0,0,.06)}
+  #qr{width:300px;height:300px;display:flex;align-items:center;justify-content:center}
+  #qr img,#qr canvas{width:300px!important;height:300px!important}
+  #status{margin-top:14px;font-size:13.5px;color:#61636e;text-align:center;max-width:340px;line-height:1.5}
+  .ok{color:#30a46c;font-weight:700}
+  .warn{color:#e5484d;font-weight:700}
+</style>
+</head>
+<body>
+<h1>Parear WhatsApp</h1>
+<div class="sub">No celular: <b>WhatsApp &gt; Aparelhos conectados &gt; Conectar um aparelho</b> e escaneie o QR abaixo.</div>
+<div id="box"><div id="qr"></div></div>
+<div id="status">Carregando…</div>
+<script>
+var SB = 'https://pyblkmxoczxqpzvbnlca.supabase.co';
+var KEY = null, ultimo = '';
+function chave(){
+  if (KEY) return Promise.resolve(KEY);
+  return fetch('./index.html', {cache:'no-store'}).then(function(r){return r.text();}).then(function(html){
+    var m = html.match(/sb_publishable_[A-Za-z0-9_\-]+/);
+    KEY = m ? m[0] : null;
+    return KEY;
+  });
+}
+function tick(){
+  var st = document.getElementById('status');
+  chave().then(function(k){
+    if(!k){ st.innerHTML = '<span class="warn">Nao achei a chave do painel.</span>'; return; }
+    return fetch(SB + '/rest/v1/wa_qr?id=eq.1&select=qr,atualizado_em', {headers:{apikey:k, Authorization:'Bearer '+k}, cache:'no-store'})
+      .then(function(r){return r.json();})
+      .then(function(rows){
+        var row = rows && rows[0];
+        if(!row || !row.qr){
+          document.getElementById('qr').innerHTML=''; ultimo='';
+          st.innerHTML='Nenhum QR ativo no momento.<br>Rode o workflow <b>wa-parear</b> no GitHub Actions e mantenha esta pagina aberta.';
+          return;
+        }
+        var idade = (Date.now() - new Date(row.atualizado_em).getTime())/1000;
+        if(idade > 90){
+          document.getElementById('qr').innerHTML=''; ultimo='';
+          st.innerHTML='<span class="warn">QR expirado.</span> Rode o <b>wa-parear</b> de novo no GitHub Actions.';
+          return;
+        }
+        if(row.qr !== ultimo){
+          ultimo = row.qr;
+          document.getElementById('qr').innerHTML='';
+          new QRCode(document.getElementById('qr'), {text: row.qr, width: 300, height: 300, correctLevel: QRCode.CorrectLevel.L});
+        }
+        st.innerHTML = '<span class="ok">QR ativo</span> · atualizado ha ' + Math.round(idade) + 's · ele renova sozinho, so escanear';
+      });
+  }).catch(function(e){ st.textContent = 'Erro: ' + e.message; });
+}
+tick(); setInterval(tick, 3000);
+</script>
+</body>
+</html>
