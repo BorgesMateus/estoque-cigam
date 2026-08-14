@@ -74,9 +74,9 @@ async function limparQr() {
 
 // ---------- Conexao WhatsApp ----------
 async function conectar(mostrarQR) {
-  const { state, saveCreds } = await useMultiFileAuthState(SESS_DIR);
   const { version } = await fetchLatestBaileysVersion();
   for (let tent = 0; tent < 3; tent++) {
+    const { state, saveCreds } = await useMultiFileAuthState(SESS_DIR);
     const sock = makeWASocket({
       auth: state, version, logger: pino({ level: 'silent' }),
       browser: ['EstoqueCigamPro', 'Chrome', '1.0'], syncFullHistory: false
@@ -104,6 +104,12 @@ async function conectar(mostrarQR) {
     if (res.status === 'open') return res.sock;
     if (res.status === 'close' && (res.code === DisconnectReason.restartRequired || res.code === 515 || (mostrarQR && res.code === 408))) {
       console.log('Reconectando (pos-pareamento)...');
+      continue;
+    }
+    if (mostrarQR && res.code === 401) {
+      console.log('Sessao antiga invalida (desconectada no celular). Gerando QR novo...');
+      fs.rmSync(SESS_DIR, { recursive: true, force: true });
+      fs.mkdirSync(SESS_DIR, { recursive: true });
       continue;
     }
     throw new Error('Nao conectou: ' + JSON.stringify(res.code != null ? res.code : res.status));
