@@ -56,6 +56,22 @@ async function subirSessao() {
   if (!r.ok) throw new Error('Falha subindo sessao: ' + r.status + ' ' + (await r.text()));
 }
 
+async function publicarQr(qr) {
+  try {
+    await fetch(SB_URL + '/rest/v1/wa_qr?on_conflict=id', {
+      method: 'POST',
+      headers: { ...H, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+      body: JSON.stringify({ id: 1, qr: qr, atualizado_em: new Date().toISOString() })
+    });
+  } catch (e) { console.log('aviso: falha publicando QR: ' + e.message); }
+}
+
+async function limparQr() {
+  try {
+    await fetch(SB_URL + '/rest/v1/wa_qr?id=eq.1', { method: 'DELETE', headers: H });
+  } catch (e) { /* ok */ }
+}
+
 // ---------- Conexao WhatsApp ----------
 async function conectar(mostrarQR) {
   const { state, saveCreds } = await useMultiFileAuthState(SESS_DIR);
@@ -67,12 +83,14 @@ async function conectar(mostrarQR) {
     });
     sock.ev.on('creds.update', saveCreds);
     const res = await new Promise((resolve) => {
-      const t = setTimeout(() => resolve({ status: 'timeout' }), 240000);
+      const t = setTimeout(() => resolve({ status: 'timeout' }), mostrarQR ? 420000 : 240000);
       sock.ev.on('connection.update', (u) => {
         if (u.qr && mostrarQR) {
           console.log('\n===== ESCANEIE O QR (WhatsApp > Aparelhos conectados > Conectar um aparelho) =====');
           console.log('(se aparecer outro QR abaixo, use sempre o MAIS RECENTE)\n');
           qrcode.generate(u.qr, { small: true });
+          publicarQr(u.qr);
+          console.log('QR na pagina: https://borgesmateus.github.io/estoque-cigam/wa.html');
         }
         if (u.connection === 'open') { clearTimeout(t); resolve({ status: 'open', sock }); }
         if (u.connection === 'close') {
@@ -84,7 +102,7 @@ async function conectar(mostrarQR) {
       });
     });
     if (res.status === 'open') return res.sock;
-    if (res.status === 'close' && (res.code === DisconnectReason.restartRequired || res.code === 515)) {
+    if (res.status === 'close' && (res.code === DisconnectReason.restartRequired || res.code === 515 || (mostrarQR && res.code === 408))) {
       console.log('Reconectando (pos-pareamento)...');
       continue;
     }
@@ -232,6 +250,7 @@ async function parear() {
   console.log(tinha ? 'Sessao existente encontrada; validando...' : 'Sem sessao salva; sera gerado um QR.');
   const sock = await conectar(true);
   console.log('\nConectado como: ' + (sock.user ? sock.user.id : '?'));
+  await limparQr();
   await esperar(5000);
   const grupos = await sock.groupFetchAllParticipating();
   console.log('\nGrupos em que o numero participa:');
