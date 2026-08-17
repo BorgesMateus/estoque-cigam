@@ -2,7 +2,7 @@ name: wa-relatorio
 
 on:
   schedule:
-    - cron: '15 10 * * *'   # 07:15 BRT, depois do snapshot das 07:00
+    - cron: '0 12 * * *'    # 09:00 BRT
   workflow_dispatch: {}
 
 jobs:
@@ -24,3 +24,4 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           WA_GRUPO: ${{ vars.WA_GRUPO }}
+          WA_NUMERO: ${{ vars.WA_NUMERO }}
