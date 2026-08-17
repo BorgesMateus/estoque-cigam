@@ -17,6 +17,7 @@ import fs from 'node:fs';
 const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
 const SB_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const GRUPO = (process.env.WA_GRUPO || 'Diretoria').trim();
+const NUMERO = (process.env.WA_NUMERO || '').replace(/\D/g, '');
 const BUCKET = 'wa-session';
 const SESS_DIR = './wa_auth';
 const cmd = process.argv[2];
@@ -274,20 +275,33 @@ async function enviar() {
   const { pdf, dia, diaBR, resumo } = await gerarPdf();
   const sock = await conectar(false);
   await esperar(3000);
-  const grupos = await sock.groupFetchAllParticipating();
-  const alvoKey = norm(GRUPO);
-  const lista = Object.values(grupos);
-  const alvo = lista.find((g) => norm(g.subject) === alvoKey) || lista.find((g) => norm(g.subject).includes(alvoKey));
-  if (!alvo) {
-    console.error('Grupo "' + GRUPO + '" nao encontrado. Grupos: ' + lista.map((g) => g.subject).join(' | '));
-    process.exit(1);
+  let destinoId, destinoNome;
+  if (NUMERO) {
+    const achado = await sock.onWhatsApp(NUMERO);
+    if (!achado || !achado.length || !achado[0].exists) {
+      console.error('Numero ' + NUMERO + ' nao encontrado no WhatsApp.');
+      process.exit(1);
+    }
+    destinoId = achado[0].jid;
+    destinoNome = 'numero ' + NUMERO;
+  } else {
+    const grupos = await sock.groupFetchAllParticipating();
+    const alvoKey = norm(GRUPO);
+    const lista = Object.values(grupos);
+    const alvo = lista.find((g) => norm(g.subject) === alvoKey) || lista.find((g) => norm(g.subject).includes(alvoKey));
+    if (!alvo) {
+      console.error('Grupo "' + GRUPO + '" nao encontrado. Grupos: ' + lista.map((g) => g.subject).join(' | '));
+      process.exit(1);
+    }
+    destinoId = alvo.id;
+    destinoNome = 'grupo ' + alvo.subject;
   }
-  await sock.sendMessage(alvo.id, {
+  await sock.sendMessage(destinoId, {
     document: pdf, mimetype: 'application/pdf',
     fileName: 'estoque_camaras_frias_' + dia + '.pdf',
     caption: '🧊 Estoque camaras frias · Filial 001 · ' + diaBR + '\n' + resumo
   });
-  console.log('Enviado para o grupo: ' + alvo.subject);
+  console.log('Enviado para ' + destinoNome);
   await esperar(8000);
   await subirSessao();
   process.exit(0);
