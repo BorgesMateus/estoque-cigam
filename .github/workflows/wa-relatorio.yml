@@ -2,7 +2,7 @@ name: wa-relatorio
 
 on:
   schedule:
-    - cron: '0 12 * * *'    # 09:00 BRT
+    - cron: '50 11 * * *'   # ~09:00 BRT (adiantado p/ compensar atraso do cron do GitHub)
   workflow_dispatch: {}
 
 jobs:
