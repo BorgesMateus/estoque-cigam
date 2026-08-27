@@ -3,6 +3,8 @@ name: wa-relatorio
 on:
   schedule:
     - cron: '50 11 * * *'   # ~09:00 BRT (adiantado p/ compensar atraso do cron do GitHub)
+    - cron: '40 12 * * *'   # repesca 09:40 BRT (se o cron das 08:50 for engolido)
+    - cron: '40 13 * * *'   # repesca 10:40 BRT (ultima tentativa)
   workflow_dispatch: {}
 
 jobs:
