@@ -21,6 +21,7 @@ const NUMERO = (process.env.WA_NUMERO || '').replace(/\D/g, '');
 const BUCKET = 'wa-session';
 const SESS_DIR = './wa_auth';
 const cmd = process.argv[2];
+const FORCAR = process.argv.includes('--forcar');
 
 if (!SB_URL || !SB_KEY) { console.error('Faltam SUPABASE_URL / SUPABASE_SERVICE_KEY'); process.exit(1); }
 
@@ -249,6 +250,26 @@ async function gerarPdf() {
   return { pdf: Buffer.from(pdf), dia, diaBR, resumo };
 }
 
+async function jaEnviouHoje(dia) {
+  if (FORCAR) return false;
+  try {
+    const r = await fetch(SB_URL + '/rest/v1/wa_envios?dia=eq.' + dia + '&select=dia', { headers: H });
+    if (!r.ok) return false;
+    const rows = await r.json();
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (e) { return false; }
+}
+
+async function marcarEnviado(dia, destino) {
+  try {
+    await fetch(SB_URL + '/rest/v1/wa_envios?on_conflict=dia', {
+      method: 'POST',
+      headers: { ...H, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+      body: JSON.stringify({ dia: dia, enviado_em: new Date().toISOString(), destino: destino })
+    });
+  } catch (e) { console.log('aviso: falha marcando envio: ' + e.message); }
+}
+
 // ---------- Comandos ----------
 async function parear() {
   await ensureBucket();
@@ -272,6 +293,11 @@ async function enviar() {
   await ensureBucket();
   const tem = await baixarSessao();
   if (!tem) { console.error('Sessao nao encontrada. Rode o workflow wa-parear e escaneie o QR primeiro.'); process.exit(1); }
+  const hoje = new Date().toISOString().slice(0, 10);
+  if (await jaEnviouHoje(hoje)) {
+    console.log('Relatorio de ' + hoje + ' ja foi enviado hoje. Nada a fazer.');
+    process.exit(0);
+  }
   const { pdf, dia, diaBR, resumo } = await gerarPdf();
   const sock = await conectar(false);
   await esperar(3000);
@@ -301,6 +327,7 @@ async function enviar() {
     fileName: 'estoque_camaras_frias_' + dia + '.pdf',
     caption: '🧊 Estoque camaras frias · Filial 001 · ' + diaBR + '\n' + resumo
   });
+  await marcarEnviado(hoje, destinoNome);
   console.log('Enviado para ' + destinoNome);
   await esperar(8000);
   await subirSessao();
