@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+node_modules/
+*.log
+# sessao do WhatsApp (Baileys) — contem credencial de dispositivo
+wa-sessao/
+auth_info*/
+.DS_Store
