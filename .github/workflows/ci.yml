@@ -1,0 +1,25 @@
+name: CI
+
+# Checagem de sintaxe de todos os robos a cada push.
+# Pega erro bobo antes de virar workflow vermelho de madrugada.
+
+on:
+  push:
+    paths:
+      - "scripts/**.mjs"
+      - "package.json"
+      - ".github/workflows/ci.yml"
+  pull_request:
+  workflow_dispatch: {}
+
+jobs:
+  sintaxe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Checar sintaxe dos robos
+        run: npm run check
