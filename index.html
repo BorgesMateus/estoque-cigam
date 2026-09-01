@@ -1073,7 +1073,7 @@ async function dadosDoMapa(){
   const ceps = {};
   for(let i=0; i<faixas.length; i+=200){
     const { data } = await sb.from('ceps').select('prefixo,bairro,cidade,uf,lat,lon').in('prefixo', faixas.slice(i,i+200));
-    (data||[]).forEach(r=>{ if(r.lat!=null && r.lon!=null) ceps[r.prefixo] = r; });
+    (data||[]).forEach(r=>{ ceps[r.prefixo] = r; });
   }
   mapaDados = { linhas, ceps, faixas: faixas.length, faixasComCoord: Object.keys(ceps).length };
   return mapaDados;
@@ -1093,7 +1093,7 @@ function agruparMapa(nivel, linhas, ceps){
         nome = c.bairro || c.cidade;
         sub  = c.bairro ? (c.cidade + (c.uf ? '/' + c.uf : '')) : (c.uf || '');
         k    = 'REG|' + normMapa(nome) + '|' + normMapa(c.cidade) + '|' + (c.uf || '');
-        ll   = [Number(c.lat), Number(c.lon)];
+        ll   = (c.lat != null && c.lon != null) ? [Number(c.lat), Number(c.lon)] : null;
         porCep++;
       }
     }
@@ -1124,7 +1124,7 @@ async function coordsDeCidade(grupos){
   }
   faltam.forEach(g => {
     const ll = coords[g.cidadeNorm + '|' + g.uf];
-    if(ll && isFinite(ll[0])) g.lls.push(ll);
+    if(ll && isFinite(ll[0])){ g.lls.push(ll); g.posicaoCidade = true; }
   });
 }
 
@@ -1160,7 +1160,7 @@ async function renderMapa(forcar){
         color:     frac > 0.5 ? '#b91c1c' : frac > 0.15 ? '#ea580c' : '#f59e0b',
         fillColor: frac > 0.5 ? '#dc2626' : frac > 0.15 ? '#f97316' : '#fbbf24',
         fillOpacity: 0.55, weight: 1.5
-      }).bindPopup(`<b>${escapeHtml(g.nome)}</b>${g.sub ? '<br><span style="opacity:.7">'+escapeHtml(g.sub)+'</span>' : ''}<br>${R$(g.valor)} em 30 dias<br>${g.clientes} cliente(s)${g.porCep ? '' : '<br><i>posição pela cidade</i>'}`)
+      }).bindPopup(`<b>${escapeHtml(g.nome)}</b>${g.sub ? '<br><span style="opacity:.7">'+escapeHtml(g.sub)+'</span>' : ''}<br>${R$(g.valor)} em 30 dias<br>${g.clientes} cliente(s)${g.posicaoCidade ? '<br><i>posição aproximada pela cidade</i>' : ''}`)
         .addTo(mapaCamada);
       bounds.push([lat,lon]);
     });
@@ -1170,7 +1170,11 @@ async function renderMapa(forcar){
     const plotado = lista.reduce((a,b)=>a+b.valor,0);
     const rotulo = nivel === 'regiao' ? 'regiões' : 'cidades';
     let msg = `${lista.length} ${rotulo} · ${R$(plotado)} plotados de ${R$(total)} faturados em 30 dias`;
-    if(nivel === 'regiao') msg += ` · ${porCep} cliente(s) posicionados por CEP`;
+    if(nivel === 'regiao'){
+      const aprox = lista.filter(g=>g.posicaoCidade).length;
+      msg += ` · ${porCep} cliente(s) posicionados por CEP`;
+      if(aprox) msg += ` · ${aprox} região(ões) com posição aproximada`;
+    }
     if(semLugar) msg += ` · ${semLugar} sem endereço`;
     $('#mapaMsg').textContent = msg;
 
