@@ -10,7 +10,7 @@ const SB_URL = need("SUPABASE_URL").replace(/\/$/, "");
 const SB_KEY = need("SUPABASE_SERVICE_KEY");
 const trim = (s) => (s == null ? "" : String(s)).trim();
 const enc = encodeURIComponent;
-const norm = (s) => trim(s).toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+const norm = (s) => trim(s).toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
 async function login() {
   const r = await fetch(`${BASE}/genericos/ge/Login/Autenticar`, {
@@ -48,7 +48,8 @@ async function main() {
   console.log("== cadastros ==");
 
   // 1) pessoas: descobrir campos válidos no $select (defensivo)
-  const candidatos = ["NomeCompleto", "Fantasia", "NomeMunicipio", "Municipio", "Cidade", "Uf", "UF", "Bairro", "RegiaoEntrega", "Ativo"];
+  const candidatos = ["NomeCompleto", "Fantasia", "NomeMunicipio", "Municipio", "Cidade", "Uf", "UF", "Bairro", "NomeBairro", "RegiaoEntrega", "Ativo",
+    "Cep", "CEP", "CepEntrega", "Endereco", "Logradouro", "NomeLogradouro", "NumeroEndereco", "Numero"];
   const validos = [];
   for (const c of candidatos) {
     const t = await cigam(hash, `/genericos/ge/Pessoa/Buscar?${enc("$select")}=${enc("Codigo," + c)}&${enc("$top")}=1`);
@@ -61,19 +62,23 @@ async function main() {
   console.log(`pessoas na API: ${pessoas.length} (HTTP ${p.status})`);
 
   const pick = (o, ks) => { for (const k of ks) { if (trim(o[k])) return trim(o[k]); } return ""; };
+  const soDigitos = (s) => trim(s).replace(/\D/g, "");
+  const cepOk = (s) => { const d = soDigitos(s); return d.length === 8 ? d : ""; };
   const clientes = pessoas.map(o => ({
     codigo: trim(o.Codigo),
     nome: pick(o, ["NomeCompleto"]),
     fantasia: pick(o, ["Fantasia"]),
     municipio: pick(o, ["NomeMunicipio", "Cidade", "Municipio"]),
     uf: pick(o, ["Uf", "UF"]),
-    bairro: pick(o, ["Bairro"]),
+    bairro: pick(o, ["Bairro", "NomeBairro"]),
     regiao: pick(o, ["RegiaoEntrega"]),
+    cep: cepOk(pick(o, ["Cep", "CEP", "CepEntrega"])),
     ativo: pick(o, ["Ativo"]),
     atualizado_em: new Date().toISOString(),
   })).filter(c => c.codigo);
   await upsert("clientes", "codigo", clientes);
-  console.log(`clientes gravados: ${clientes.length}`);
+  const comCep = clientes.filter(c => c.cep).length;
+  console.log(`clientes gravados: ${clientes.length} (com CEP: ${comCep} = ${clientes.length ? Math.round(comCep / clientes.length * 100) : 0}%)`);
 
   // 2) representantes: códigos usados nas vendas, nomes vindos do cadastro de pessoas
   const reps = (await sb("/vendas_por_rep_30d?select=representante")) || [];
