@@ -281,9 +281,17 @@ const CONFIG = {
       <div class="panel full pv"><h3>🏙️ Produto × cidade — top 8×8 por faturamento (F)</h3>
         <div class="sub">Célula mais azul = mais faturamento. Mostra onde cada produto é forte (e onde tem espaço).</div>
         <div id="matrizBox" style="overflow:auto"></div></div>
-      <div class="panel full pm"><h3>🗺️ Mapa de calor — faturamento por cidade (30 dias, pedidos F)</h3>
-        <div id="mapaMsg" class="sub"></div>
-        <div id="mapa"></div></div>
+      <div class="panel full pm"><h3>🗺️ Mapa de calor — faturamento por região (30 dias, pedidos F)</h3>
+        <div class="sub" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+          <label>Agrupar por
+            <select id="selMapaNivel">
+              <option value="regiao">Região (CEP)</option>
+              <option value="cidade">Cidade</option>
+            </select></label>
+          <span id="mapaMsg"></span>
+        </div>
+        <div id="mapa"></div>
+        <div id="mapaTop" class="sub" style="margin-top:8px"></div></div>
       <div class="panel full pp"><h3>📋 Situação dos pedidos (todo o período coletado)</h3>
         <div id="sitPills" style="margin:8px 0 4px"></div>
         <div class="sub">F = Faturado · C = Cancelado · L = Liberado · A = Aprovado · P = Pendente (fluxo do controle de pedido).</div></div>
@@ -841,8 +849,8 @@ STATE.cliInfo = {}; STATE.repInfo = {};
 async function carregarClientes(codigos){
   const faltam = [...new Set(codigos.filter(c=>c && !STATE.cliInfo[c]))];
   for(let i=0; i<faltam.length; i+=100){
-    const { data } = await sb.from('clientes').select('codigo,nome,fantasia,municipio,uf').in('codigo', faltam.slice(i,i+100));
-    (data||[]).forEach(r=>{ STATE.cliInfo[trim(r.codigo)] = {nome:trim(r.fantasia)||trim(r.nome)||trim(r.codigo), municipio:trim(r.municipio), uf:trim(r.uf)}; });
+    const { data } = await sb.from('clientes').select('codigo,nome,fantasia,municipio,uf,cep').in('codigo', faltam.slice(i,i+100));
+    (data||[]).forEach(r=>{ STATE.cliInfo[trim(r.codigo)] = {nome:trim(r.fantasia)||trim(r.nome)||trim(r.codigo), municipio:trim(r.municipio), uf:trim(r.uf), cep:trim(r.cep)}; });
   }
 }
 function nomeCli(c){ return (STATE.cliInfo[c] && STATE.cliInfo[c].nome) ? STATE.cliInfo[c].nome.slice(0,28) : c; }
@@ -1042,63 +1050,137 @@ async function renderVendas(){
   }
 }
 /* =====================================================================
-   MAPA DE CALOR (Leaflet) — faturamento por cidade, pedidos F, 30 dias
+   MAPA DE CALOR (Leaflet) — faturamento por regiao (faixa de CEP), 30 dias
+   Agrupa pelos 5 primeiros digitos do CEP do cliente, que no DF corresponde
+   de perto a uma regiao administrativa (Ceilandia, Taguatinga, Asa Sul...).
+   Quem nao tem CEP resolvido cai no municipio, como era antes.
    ===================================================================== */
-let mapa = null, mapaCamada = null, mapaFeito = false;
-async function renderMapa(){
-  if(!sb || mapaFeito) return;
+let mapa = null, mapaCamada = null, mapaDados = null, mapaNivel = null;
+const normMapa = s => trim(s).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+
+async function dadosDoMapa(){
+  if(mapaDados) return mapaDados;
+  const { data: cli } = await sb.from('vendas_por_cliente_sit_30d')
+    .select('cliente,valor').eq('situacao_pedido','F').limit(2000);
+  const linhas = cli || [];
+  const codigos = [...new Set(linhas.map(r=>trim(r.cliente)).filter(Boolean))];
+  await carregarClientes(codigos);
+  const faixas = [...new Set(codigos.map(c=>{
+    const i = STATE.cliInfo[c];
+    const d = (i && i.cep) ? String(i.cep).replace(/\D/g,'') : '';
+    return d.length === 8 ? d.slice(0,5) : '';
+  }).filter(Boolean))];
+  const ceps = {};
+  for(let i=0; i<faixas.length; i+=200){
+    const { data } = await sb.from('ceps').select('prefixo,bairro,cidade,uf,lat,lon').in('prefixo', faixas.slice(i,i+200));
+    (data||[]).forEach(r=>{ if(r.lat!=null && r.lon!=null) ceps[r.prefixo] = r; });
+  }
+  mapaDados = { linhas, ceps, faixas: faixas.length, faixasComCoord: Object.keys(ceps).length };
+  return mapaDados;
+}
+
+function agruparMapa(nivel, linhas, ceps){
+  const grupos = {}; let semLugar = 0, valorSemLugar = 0, porCep = 0;
+  linhas.forEach(r=>{
+    const info = STATE.cliInfo[trim(r.cliente)];
+    const valor = Number(r.valor) || 0;
+    if(!info){ semLugar++; valorSemLugar += valor; return; }
+    let k = null, nome = null, sub = null, ll = null;
+    if(nivel === 'regiao'){
+      const d = info.cep ? String(info.cep).replace(/\D/g,'') : '';
+      const c = d.length === 8 ? ceps[d.slice(0,5)] : null;
+      if(c){
+        nome = c.bairro || c.cidade;
+        sub  = c.bairro ? (c.cidade + (c.uf ? '/' + c.uf : '')) : (c.uf || '');
+        k    = 'REG|' + normMapa(nome) + '|' + normMapa(c.cidade) + '|' + (c.uf || '');
+        ll   = [Number(c.lat), Number(c.lon)];
+        porCep++;
+      }
+    }
+    if(!k){
+      if(!info.municipio){ semLugar++; valorSemLugar += valor; return; }
+      nome = info.municipio; sub = info.uf || '';
+      k = 'CID|' + normMapa(info.municipio) + '|' + (info.uf || '').toUpperCase();
+    }
+    const g = grupos[k] = grupos[k] || {
+      nome, sub, valor: 0, clientes: 0, lls: [],
+      cidadeNorm: normMapa(info.municipio || ''), uf: (info.uf || '').toUpperCase(),
+      porCep: k.startsWith('REG|')
+    };
+    g.valor += valor; g.clientes++;
+    if(ll && isFinite(ll[0])) g.lls.push(ll);
+  });
+  return { grupos, semLugar, valorSemLugar, porCep };
+}
+
+async function coordsDeCidade(grupos){
+  const faltam = Object.values(grupos).filter(g => !g.lls.length && g.cidadeNorm);
+  const chaves = [...new Set(faltam.map(g => g.cidadeNorm + '|' + g.uf))];
+  const coords = {};
+  for(let i=0; i<chaves.length; i+=80){
+    const nomes = chaves.slice(i, i+80).map(k => k.split('|')[0]);
+    const { data: ms } = await sb.from('municipios').select('nome_norm,uf,lat,lon').in('nome_norm', nomes);
+    (ms||[]).forEach(m => { coords[m.nome_norm + '|' + m.uf] = [Number(m.lat), Number(m.lon)]; });
+  }
+  faltam.forEach(g => {
+    const ll = coords[g.cidadeNorm + '|' + g.uf];
+    if(ll && isFinite(ll[0])) g.lls.push(ll);
+  });
+}
+
+document.addEventListener('change', (ev)=>{
+  if(ev.target && ev.target.id === 'selMapaNivel') renderMapa(true);
+});
+async function renderMapa(forcar){
+  if(!sb) return;
+  const nivel = ($('#selMapaNivel') || {}).value || 'regiao';
+  if(mapaNivel === nivel && !forcar) return;
   try{
     $('#mapaMsg').innerHTML = '<span class="spin"></span> montando o mapa…';
-    const { data: cli } = await sb.from('vendas_por_cliente_sit_30d')
-      .select('cliente,valor').eq('situacao_pedido','F').limit(2000);
-    const codigos = [...new Set((cli||[]).map(r=>trim(r.cliente)).filter(Boolean))];
-    await carregarClientes(codigos);
-    // agrega por cidade
-    const norm = s => trim(s).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
-    const porCidade = {};
-    (cli||[]).forEach(r=>{
-      const info = STATE.cliInfo[trim(r.cliente)];
-      if(!info || !info.municipio) return;
-      const k = norm(info.municipio) + "|" + info.uf.toUpperCase();
-      const o = porCidade[k] = porCidade[k] || {nome:info.municipio, uf:info.uf, valor:0, clientes:0};
-      o.valor += Number(r.valor)||0; o.clientes++;
-    });
-    // lat/lon dos municípios envolvidos
-    const chaves = Object.keys(porCidade);
-    const coords = {};
-    for(let i=0; i<chaves.length; i+=80){
-      const nomes = chaves.slice(i,i+80).map(k=>k.split("|")[0]);
-      const { data: ms } = await sb.from('municipios').select('nome_norm,uf,lat,lon').in('nome_norm', nomes);
-      (ms||[]).forEach(m=>{ coords[m.nome_norm+"|"+m.uf] = [Number(m.lat), Number(m.lon)]; });
-    }
+    const { linhas, ceps } = await dadosDoMapa();
+    const { grupos, semLugar, valorSemLugar, porCep } = agruparMapa(nivel, linhas, ceps);
+    await coordsDeCidade(grupos);
+
     if(!mapa){
-      mapa = L.map('mapa').setView([-15.8, -47.9], 8);
+      mapa = L.map('mapa').setView([-15.8, -47.9], 9);
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 18, attribution: '© OpenStreetMap'}).addTo(mapa);
     }
     if(mapaCamada) mapaCamada.remove();
     mapaCamada = L.layerGroup().addTo(mapa);
-    const valores = Object.values(porCidade).map(c=>c.valor);
-    const vMax = Math.max(...valores, 1);
-    let plotadas = 0; const bounds = [];
-    for(const k of chaves){
-      const c = porCidade[k];
-      const ll = coords[k];
-      if(!ll || !isFinite(ll[0])) continue;
-      const frac = c.valor / vMax;
-      L.circleMarker(ll, {
-        radius: 6 + 34 * Math.sqrt(frac),
-        color: frac > 0.5 ? "#b91c1c" : frac > 0.15 ? "#ea580c" : "#f59e0b",
-        fillColor: frac > 0.5 ? "#dc2626" : frac > 0.15 ? "#f97316" : "#fbbf24",
+
+    const lista = Object.values(grupos).filter(g => g.lls.length).sort((a,b)=>b.valor-a.valor);
+    const vMax = Math.max(...lista.map(g=>g.valor), 1);
+    const bounds = [];
+    lista.forEach(g=>{
+      const lat = g.lls.reduce((a,b)=>a+b[0],0) / g.lls.length;
+      const lon = g.lls.reduce((a,b)=>a+b[1],0) / g.lls.length;
+      const frac = g.valor / vMax;
+      L.circleMarker([lat,lon], {
+        radius: 6 + 30 * Math.sqrt(frac),
+        color:     frac > 0.5 ? '#b91c1c' : frac > 0.15 ? '#ea580c' : '#f59e0b',
+        fillColor: frac > 0.5 ? '#dc2626' : frac > 0.15 ? '#f97316' : '#fbbf24',
         fillOpacity: 0.55, weight: 1.5
-      }).bindPopup(`<b>${c.nome} — ${c.uf}</b><br>${R$(c.valor)} em 30 dias<br>${c.clientes} cliente(s)`)
+      }).bindPopup(`<b>${escapeHtml(g.nome)}</b>${g.sub ? '<br><span style="opacity:.7">'+escapeHtml(g.sub)+'</span>' : ''}<br>${R$(g.valor)} em 30 dias<br>${g.clientes} cliente(s)${g.porCep ? '' : '<br><i>posição pela cidade</i>'}`)
         .addTo(mapaCamada);
-      bounds.push(ll); plotadas++;
-    }
+      bounds.push([lat,lon]);
+    });
     if(bounds.length) mapa.fitBounds(bounds, {padding:[30,30]});
-    const totalMapa = Object.values(porCidade).reduce((a,b)=>a+b.valor,0);
-    $('#mapaMsg').textContent = `${plotadas} cidades · ${R$(totalMapa)} em pedidos faturados nos últimos 30 dias · bolha maior = mais faturamento`;
-    mapaFeito = true;
-  }catch(e){ console.warn("mapa:", e); $('#mapaMsg').textContent = "não consegui montar o mapa: " + (e.message||e); }
+
+    const total = Object.values(grupos).reduce((a,b)=>a+b.valor,0) + valorSemLugar;
+    const plotado = lista.reduce((a,b)=>a+b.valor,0);
+    const rotulo = nivel === 'regiao' ? 'regiões' : 'cidades';
+    let msg = `${lista.length} ${rotulo} · ${R$(plotado)} plotados de ${R$(total)} faturados em 30 dias`;
+    if(nivel === 'regiao') msg += ` · ${porCep} cliente(s) posicionados por CEP`;
+    if(semLugar) msg += ` · ${semLugar} sem endereço`;
+    $('#mapaMsg').textContent = msg;
+
+    const top = lista.slice(0,10);
+    $('#mapaTop').innerHTML = top.length
+      ? '<b>Top ' + top.length + ' por faturamento:</b> ' + top.map((g,i)=>
+          `${i+1}. ${escapeHtml(g.nome)} (${R$(g.valor)})`).join(' · ')
+      : '';
+    mapaNivel = nivel;
+  }catch(e){ console.warn('mapa:', e); $('#mapaMsg').textContent = 'não consegui montar o mapa: ' + (e.message||e); }
 }
 /* =====================================================================
    ABA PEDIDOS — situações, pedidos/dia, ticket médio, representantes
