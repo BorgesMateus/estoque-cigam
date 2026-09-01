@@ -1,0 +1,22 @@
+{
+  "name": "estoque-cigam",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monitoramento de estoque e vendas integrado ao ERP CIGAM",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "snapshot": "node scripts/snapshot.mjs",
+    "vendas": "node scripts/vendas.mjs",
+    "cadastros": "node scripts/cadastros.mjs",
+    "geocep": "node scripts/geocep.mjs",
+    "perfil": "node scripts/perfil.mjs",
+    "probe": "node scripts/probe.mjs",
+    "wa:parear": "node scripts/wa.mjs parear",
+    "wa:enviar": "node scripts/wa.mjs enviar",
+    "painel": "python3 -m http.server 8080",
+    "check": "node --check scripts/snapshot.mjs && node --check scripts/vendas.mjs && node --check scripts/cadastros.mjs && node --check scripts/geocep.mjs && node --check scripts/perfil.mjs && node --check scripts/probe.mjs && node --check scripts/wa.mjs && node --check scripts/pedido.mjs",
+    "test": "node --test"
+  },
+  "comentario": "Os robos nao tem dependencia. Apenas wa.mjs precisa de @whiskeysockets/baileys, qrcode-terminal, pino e playwright, instalados sob demanda pelos workflows wa-parear e wa-relatorio."
+}
