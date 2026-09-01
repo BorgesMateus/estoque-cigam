@@ -48,20 +48,23 @@ async function upsert(rows) {
     });
   }
 }
-async function pegaJson(url, headers = {}) {
+const diag = {};
+function marca(fonte, o) { const d = diag[fonte] = diag[fonte] || { ok: 0, http: {}, erro: 0, vazio: 0 }; if (o.ok) d.ok++; if (o.http) d.http[o.http] = (d.http[o.http] || 0) + 1; if (o.erro) { d.erro++; if (!d.primeiroErro) d.primeiroErro = o.erro; } if (o.vazio) d.vazio++; }
+async function pegaJson(url, fonte, headers = {}) {
   try {
     const r = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json", ...headers } });
-    if (!r.ok) return null;
+    if (!r.ok) { marca(fonte, { http: r.status }); return null; }
     const t = await r.text();
-    if (!t || t[0] !== "{" && t[0] !== "[") return null;
+    if (!t || t[0] !== "{" && t[0] !== "[") { marca(fonte, { vazio: 1 }); return null; }
+    marca(fonte, { ok: 1 });
     return JSON.parse(t);
-  } catch { return null; }
+  } catch (e) { marca(fonte, { erro: String(e && e.message || e).slice(0, 120) }); return null; }
 }
 
 /* ---- fontes, em cascata ---- */
 // 1) AwesomeAPI: devolve lat/lng direto na maioria dos CEPs
 async function viaAwesome(cep) {
-  const j = await pegaJson(`https://cep.awesomeapi.com.br/json/${cep}`);
+  const j = await pegaJson(`https://cep.awesomeapi.com.br/json/${cep}`, "awesomeapi");
   if (!j || j.status === 400 || !j.city) return null;
   const lat = Number(j.lat), lon = Number(j.lng);
   return {
@@ -72,7 +75,7 @@ async function viaAwesome(cep) {
 }
 // 2) BrasilAPI v2: bairro/cidade sempre; coordenada as vezes
 async function viaBrasilApi(cep) {
-  const j = await pegaJson(`https://brasilapi.com.br/api/v1/cep/v2/${cep}`);
+  const j = await pegaJson(`https://brasilapi.com.br/api/v1/cep/v2/${cep}`, "brasilapi");
   if (!j || !j.city) return null;
   const c = j.location && j.location.coordinates;
   const lat = c ? Number(c.latitude) : NaN, lon = c ? Number(c.longitude) : NaN;
@@ -84,7 +87,7 @@ async function viaBrasilApi(cep) {
 }
 // 3) ViaCEP: so bairro/cidade/UF, sem coordenada
 async function viaViaCep(cep) {
-  const j = await pegaJson(`https://viacep.com.br/ws/${cep}/json/`);
+  const j = await pegaJson(`https://viacep.com.br/ws/${cep}/json/`, "viacep");
   if (!j || j.erro || !j.localidade) return null;
   return { bairro: trim(j.bairro), cidade: trim(j.localidade), uf: trim(j.uf), lat: null, lon: null, fonte: "viacep" };
 }
@@ -99,21 +102,34 @@ async function coordDoBairro(bairro, cidade, uf) {
   const espera = 1100 - (Date.now() - ultimoNominatim);
   if (espera > 0) await dorme(espera);
   ultimoNominatim = Date.now();
-  const j = await pegaJson(
-    `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&q=${encodeURIComponent(q)}`
-  );
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&q=${encodeURIComponent(q)}`;
+  let j = await pegaJson(url, "nominatim");
+  if (!Array.isArray(j) || !j.length) {
+    await dorme(1500);
+    ultimoNominatim = Date.now();
+    j = await pegaJson(url, "nominatim");
+  }
   const achado = Array.isArray(j) && j.length ? { lat: Number(j[0].lat), lon: Number(j[0].lon) } : null;
   cacheNominatim.set(chave, achado);
   return achado;
 }
 
-async function resolve(cep) {
+async function resolveUm(cep) {
   let r = await viaAwesome(cep);
   if (!r || !r.lat) {
     const b = await viaBrasilApi(cep);
     if (b && (b.lat || !r)) r = b;
   }
   if (!r) r = await viaViaCep(cep);
+  return r;
+}
+async function resolve(amostras) {
+  const tentativas = [...amostras, amostras[0].slice(0, 5) + "000"];
+  let r = null;
+  for (const cep of tentativas) {
+    r = await resolveUm(cep);
+    if (r) break;
+  }
   if (!r) return null;
   if (r.lat == null || r.lon == null) {
     const c = await coordDoBairro(r.bairro, r.cidade, r.uf);
@@ -131,7 +147,9 @@ async function main() {
     const d = dig(c.cep);
     if (d.length !== 8) continue;
     const p = d.slice(0, 5);
-    if (!porPrefixo.has(p)) porPrefixo.set(p, d);
+    const lista = porPrefixo.get(p) || [];
+    if (lista.length < 4 && !lista.includes(d)) lista.push(d);
+    porPrefixo.set(p, lista);
   }
   console.log(`clientes com CEP: ${clientes.length} · faixas distintas: ${porPrefixo.size}`);
 
@@ -146,8 +164,8 @@ async function main() {
   const porFonte = {};
   let semNada = 0;
   for (let i = 0; i < alvo.length; i++) {
-    const [prefixo, cep] = alvo[i];
-    const r = await resolve(cep);
+    const [prefixo, amostras] = alvo[i];
+    const r = await resolve(amostras);
     if (!r) { semNada++; continue; }
     porFonte[r.fonte] = (porFonte[r.fonte] || 0) + 1;
     linhas.push({
@@ -164,6 +182,7 @@ async function main() {
   const comCoord = total.filter(r => r.lat != null).length;
   console.log(`resolvidos nesta rodada: ${alvo.length - semNada} · sem resposta: ${semNada}`);
   console.log("por fonte:", JSON.stringify(porFonte));
+  console.log("diagnostico das APIs:", JSON.stringify(diag));
   console.log(`cache total: ${total.length} faixas · com coordenada: ${comCoord}`);
   console.log("== fim ==");
 }
