@@ -1,0 +1,30 @@
+name: Geocodificar CEPs (mapa por regiao)
+
+# Monta o cache de coordenadas por faixa de CEP que o mapa de calor usa.
+# Incremental: cada rodada so resolve as faixas que ainda nao tem coordenada.
+
+on:
+  schedule:
+    - cron: "10 11 * * 0"   # domingos 08:10 em Brasilia, logo apos os cadastros
+  workflow_dispatch:
+    inputs:
+      limite:
+        description: "quantas faixas de CEP resolver nesta rodada"
+        required: false
+        default: "1200"
+
+jobs:
+  geocep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Resolver CEPs
+        run: node scripts/geocep.mjs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GEOCEP_LIMITE: ${{ github.event.inputs.limite || '1200' }}
